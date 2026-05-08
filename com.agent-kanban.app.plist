@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template для launchd: scripts/install_launchd.sh подставляет
+  __INSTALL_PATH__ в актуальный путь к репо при `install`.
+  НЕ загружай этот файл напрямую через launchctl — используй скрипт.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agent-kanban.app</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__INSTALL_PATH__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>kanban_ui</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__INSTALL_PATH__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>KANBAN_HOST</key>
+        <string>127.0.0.1</string>
+        <key>KANBAN_PORT</key>
+        <string>7777</string>
+        <key>PATH</key>
+        <string>__INSTALL_PATH__/.venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/agent-kanban/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/agent-kanban/stderr.log</string>
+</dict>
+</plist>

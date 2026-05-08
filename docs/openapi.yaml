@@ -1,0 +1,987 @@
+openapi: 3.1.0
+info:
+  title: Kanban
+  version: '2.0'
+paths:
+  /:
+    get:
+      summary: Index
+      operationId: index__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/html:
+              schema:
+                type: string
+  /p/{project_id}:
+    get:
+      summary: Index For Project
+      description: 'SPA-style: тот же HTML, frontend читает project_id из location.pathname.'
+      operationId: index_for_project_p__project_id__get
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/html:
+              schema:
+                type: string
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/board:
+    get:
+      summary: Get Board
+      operationId: get_board_api_board_get
+      parameters:
+      - name: project
+        in: query
+        required: false
+        schema:
+          type: string
+          description: project_id
+          default: default
+          title: Project
+        description: project_id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Board Api Board Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects:
+    get:
+      summary: List Projects
+      operationId: list_projects_api_projects_get
+      parameters:
+      - name: include_archived
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Archived
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Projects Api Projects Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Create Project
+      operationId: create_project_api_projects_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Project Api Projects Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}:
+    patch:
+      summary: Update Project
+      operationId: update_project_api_projects__project_id__patch
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Update Project Api Projects  Project Id  Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}/plan-candidates:
+    get:
+      summary: List Plan Candidates
+      description: Plan-кандидаты для существующего проекта (использует project.path).
+      operationId: list_plan_candidates_api_projects__project_id__plan_candidates_get
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Plan Candidates Api Projects  Project Id  Plan
+                  Candidates Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/system/list-md-files:
+    get:
+      summary: List Md Files
+      description: Plan-кандидаты по произвольному пути (для wizard'а до создания
+        проекта).
+      operationId: list_md_files_api_system_list_md_files_get
+      parameters:
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Md Files Api System List Md Files Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}/source:
+    get:
+      summary: Get Project Source
+      operationId: get_project_source_api_projects__project_id__source_get
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Project Source Api Projects  Project Id  Source
+                  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      summary: Delete Project Source
+      operationId: delete_project_source_api_projects__project_id__source_delete
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Delete Project Source Api Projects  Project Id  Source
+                  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}/source/plan-new:
+    post:
+      summary: Setup Source Plan New
+      description: Создаёт PLAN.md в project.path, обновляет CLAUDE.md, регистрирует
+        source.
+      operationId: setup_source_plan_new_api_projects__project_id__source_plan_new_post
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Setup Source Plan New Api Projects  Project Id  Source
+                  Plan New Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}/source/plan-local:
+    post:
+      summary: Setup Source Plan Local
+      description: 'Подключает один или несколько plan-файлов, импортирует задачи
+        из всех,
+
+        обновляет CLAUDE.md (упоминая первый файл как канонический).'
+      operationId: setup_source_plan_local_api_projects__project_id__source_plan_local_post
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourcePlanLocalRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Setup Source Plan Local Api Projects  Project Id  Source
+                  Plan Local Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}/source/git:
+    post:
+      summary: Setup Source Git
+      description: 'Регистрирует git-источник: URL в config, token в .env-secrets
+        (0600).'
+      operationId: setup_source_git_api_projects__project_id__source_git_post
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceGitRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Setup Source Git Api Projects  Project Id  Source
+                  Git Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/projects/{project_id}/archive:
+    post:
+      summary: Archive Project
+      operationId: archive_project_api_projects__project_id__archive_post
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectArchiveRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Archive Project Api Projects  Project Id  Archive
+                  Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}:
+    get:
+      summary: Get Task
+      operationId: get_task_api_tasks__task_id__get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Task Api Tasks  Task Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      summary: Update Task
+      operationId: update_task_api_tasks__task_id__patch
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Update Task Api Tasks  Task Id  Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks:
+    post:
+      summary: Create Task
+      operationId: create_task_api_tasks_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Create Task Api Tasks Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/move:
+    post:
+      summary: Move Task
+      operationId: move_task_api_tasks__task_id__move_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Move Task Api Tasks  Task Id  Move Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/comment:
+    post:
+      summary: Add Comment
+      operationId: add_comment_api_tasks__task_id__comment_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Add Comment Api Tasks  Task Id  Comment Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/links:
+    post:
+      summary: Add Link
+      operationId: add_link_api_tasks__task_id__links_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Add Link Api Tasks  Task Id  Links Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/blockers:
+    post:
+      summary: Set Blockers
+      operationId: set_blockers_api_tasks__task_id__blockers_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlockersRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Set Blockers Api Tasks  Task Id  Blockers Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/snapshot:
+    post:
+      summary: Snapshot
+      operationId: snapshot_api_snapshot_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Snapshot Api Snapshot Post
+  /api/automation/status:
+    get:
+      summary: Get Automation Status
+      description: Состояние inbox watcher, rule engine и webhook dispatcher.
+      operationId: get_automation_status_api_automation_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Get Automation Status Api Automation Status Get
+  /api/system/claude-auth-status:
+    get:
+      summary: Claude Auth Status
+      description: 'Текущий статус авторизации Claude Code CLI.
+
+
+        Возвращает ``{"available": false}`` если бинарник не найден,
+
+        иначе ``{"available": true, "loggedIn": bool, "authMethod": str}``.'
+      operationId: claude_auth_status_api_system_claude_auth_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Claude Auth Status Api System Claude Auth Status Get
+  /api/system/claude-auth-login:
+    post:
+      summary: Claude Auth Login
+      description: 'Запускает ``claude auth login --claudeai`` в фоне.
+
+
+        Команда сама откроет OAuth-flow в браузере. Endpoint не ждёт завершения —
+
+        возвращает сразу же. Пользователь после успешного логина увидит обновлённый
+
+        status через poll на /api/system/claude-auth-status.'
+      operationId: claude_auth_login_api_system_claude_auth_login_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Claude Auth Login Api System Claude Auth Login Post
+  /api/system/pick-folder:
+    post:
+      summary: Pick Folder
+      description: 'Открывает нативный диалог выбора папки (macOS / Linux+zenity /
+        Windows).
+
+
+        Возвращает ``{"path": "/abs/path"}`` или ``{"path": null, "cancelled": true}``,
+
+        если пользователь нажал Отмена. Если на платформе нет picker''а — 501.'
+      operationId: pick_folder_api_system_pick_folder_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Pick Folder Api System Pick Folder Post
+  /api/system/pick-file:
+    post:
+      summary: Pick File
+      description: Открывает нативный диалог выбора файла. macOS only пока.
+      operationId: pick_file_api_system_pick_file_post
+      parameters:
+      - name: default_location
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Default Location
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Pick File Api System Pick File Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    BlockersRequest:
+      properties:
+        blocker_ids:
+          items:
+            type: string
+          type: array
+          title: Blocker Ids
+      type: object
+      required:
+      - blocker_ids
+      title: BlockersRequest
+    CommentRequest:
+      properties:
+        text:
+          type: string
+          title: Text
+      type: object
+      required:
+      - text
+      title: CommentRequest
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    LinkRequest:
+      properties:
+        type:
+          type: string
+          title: Type
+        value:
+          type: string
+          title: Value
+      type: object
+      required:
+      - type
+      - value
+      title: LinkRequest
+    MoveRequest:
+      properties:
+        to_status:
+          type: string
+          title: To Status
+        column_order:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Column Order
+        comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Comment
+      type: object
+      required:
+      - to_status
+      title: MoveRequest
+    ProjectArchiveRequest:
+      properties:
+        archived:
+          type: boolean
+          title: Archived
+          default: true
+      type: object
+      title: ProjectArchiveRequest
+    ProjectCreate:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 'slug: lowercase, a-z 0-9 -, 2-32 chars'
+        name:
+          type: string
+          title: Name
+        color:
+          type: string
+          title: Color
+          default: '#F10D30'
+        icon:
+          type: string
+          title: Icon
+          default: ''
+        sort_order:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Sort Order
+        path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Path
+      type: object
+      required:
+      - id
+      - name
+      title: ProjectCreate
+    ProjectUpdate:
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        color:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Color
+        icon:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Icon
+        sort_order:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Sort Order
+        path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Path
+      type: object
+      title: ProjectUpdate
+    SourceGitRequest:
+      properties:
+        repo_url:
+          type: string
+          title: Repo Url
+        token:
+          type: string
+          title: Token
+          default: ''
+      type: object
+      required:
+      - repo_url
+      title: SourceGitRequest
+    SourcePlanLocalRequest:
+      properties:
+        files:
+          items:
+            type: string
+          type: array
+          title: Files
+          description: пути к plan-файлам относительно project.path (можно несколько)
+        file:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: File
+      type: object
+      title: SourcePlanLocalRequest
+    TaskCreate:
+      properties:
+        title:
+          type: string
+          title: Title
+        description:
+          type: string
+          title: Description
+          default: ''
+        acceptance:
+          type: string
+          title: Acceptance
+          default: ''
+        status:
+          type: string
+          title: Status
+          default: backlog
+        priority:
+          type: string
+          title: Priority
+          default: normal
+        size:
+          type: string
+          title: Size
+          default: M
+        external_blocker:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: External Blocker
+        links:
+          items:
+            additionalProperties:
+              type: string
+            type: object
+          type: array
+          title: Links
+        project_id:
+          type: string
+          title: Project Id
+          default: default
+      type: object
+      required:
+      - title
+      title: TaskCreate
+    TaskUpdate:
+      properties:
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        acceptance:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Acceptance
+        priority:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Priority
+        size:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Size
+        external_blocker:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: External Blocker
+      type: object
+      title: TaskUpdate
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+

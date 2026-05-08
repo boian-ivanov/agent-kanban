@@ -1,0 +1,36 @@
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak.*
+
+# Runtime data
+kanban_data/
+snapshots/*.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local env
+.env
+.env.local
+
+# launchd materialized plist (template + sed)
+~/Library/LaunchAgents/com.agent-kanban.app.plist
