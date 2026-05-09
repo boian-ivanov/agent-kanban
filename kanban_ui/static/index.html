@@ -10,7 +10,18 @@
   <link rel="stylesheet" href="/static/styles.css?v=2026-05-09-en1" />
   <script>
     // Apply saved theme and profile before body parses — no flash of wrong styles.
+    // Also accept ?theme=light|dark and ?profile=standard|cyberpunk|horizon
+    // as a one-off override (handy for screenshots, shareable links, demos).
     (function () {
+      var qs = new URLSearchParams(location.search);
+      var qsTheme = qs.get("theme");
+      if (qsTheme === "light" || qsTheme === "dark") {
+        localStorage.setItem("kb.theme", qsTheme);
+      }
+      var qsProfile = qs.get("profile");
+      if (qsProfile === "standard" || qsProfile === "cyberpunk" || qsProfile === "horizon") {
+        localStorage.setItem("kb.profile", qsProfile);
+      }
       var t = localStorage.getItem("kb.theme");
       if (!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", t);

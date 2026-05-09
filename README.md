@@ -10,7 +10,18 @@ A self-hosted kanban board designed to be driven by AI coding agents
 Drag-drop in browser, REST + MCP for agents. Multi-project, light/dark
 theme, markdown plan-file import, automation rules.
 
-![Board screenshot](docs/screenshots/board-light.png)
+![Board — light theme](docs/screenshots/board-light.png)
+
+<details>
+<summary>More themes & profiles</summary>
+
+| Dark theme | Cyberpunk profile | Horizon profile |
+|---|---|---|
+| ![dark](docs/screenshots/board-dark.png) | ![cyberpunk](docs/screenshots/board-cyberpunk.png) | ![horizon](docs/screenshots/board-horizon.png) |
+
+Toggle theme with `t`, cycle profiles with `p`. Or pin a theme/profile via URL: `?theme=light&profile=cyberpunk`.
+
+</details>
 
 ## Features
 
