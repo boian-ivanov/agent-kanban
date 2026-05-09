@@ -1,7 +1,7 @@
 """agent-kanban — MCP server.
 
-stdio transport. Регистрируется в ``~/.claude.json`` (Claude Code) или
-``.mcp.json`` (workspace-scope), формат:
+stdio transport. Registered in ``~/.claude.json`` (Claude Code) or
+``.mcp.json`` (workspace scope) using the format:
 
     {
       "mcpServers": {
@@ -14,20 +14,20 @@ stdio transport. Регистрируется в ``~/.claude.json`` (Claude Code
       }
     }
 
-То же подходит для Cline (Settings → MCP Servers → Add).
+The same setup works for Cline (Settings → MCP Servers → Add).
 
-Tools (actor = "claude" по умолчанию, переопределяется параметром):
+Tools (actor = "claude" by default, overridable via parameter):
 
-* ``kanban_list``   — список задач (фильтр по status / assignee)
-* ``kanban_get``    — полная карточка с history
-* ``kanban_pull``   — атомарно «беру задачу» (approved → analyst, assignee=claude)
-* ``kanban_move``   — перевод задачи в новый статус
-* ``kanban_comment``— коммент в history
-* ``kanban_create`` — новая карточка
-* ``kanban_link``   — добавить ссылку (memory / file / pr / url)
-* ``kanban_columns``— описание колонок (для ориентации агента)
+* ``kanban_list``    — list tasks (filter by status / assignee)
+* ``kanban_get``     — full card with history
+* ``kanban_pull``    — atomically "claim a task" (approved → analyst, assignee=claude)
+* ``kanban_move``    — move a task to a new status
+* ``kanban_comment`` — comment in history
+* ``kanban_create``  — new card
+* ``kanban_link``    — add a link (memory / file / pr / url)
+* ``kanban_columns`` — column descriptions (so the agent gets oriented)
 
-При ошибке возвращается человекочитаемое сообщение, MCP-уровень не падает.
+On failure a human-readable message is returned; the MCP layer does not crash.
 """
 from __future__ import annotations
 
@@ -73,9 +73,9 @@ mcp = FastMCP("agent-kanban")
 
 @mcp.tool()
 def kanban_columns() -> dict[str, Any]:
-    """Описание всех колонок канбана и кто двигает в/из них.
+    """Describe every kanban column and who moves cards in/out of it.
 
-    Используй в начале сессии чтобы понять текущую модель статусов.
+    Call this at the start of a session to understand the current status model.
     """
     return _ok({"columns": status_meta(), "statuses": STATUSES})
 
@@ -101,13 +101,13 @@ def kanban_list(
     assignee: str | None = None,
     project_id: str | None = None,
 ) -> dict[str, Any]:
-    """Список задач с опциональным фильтром.
+    """List tasks with optional filters.
 
     Args:
-        status: один из backlog/approved/analyst/in_progress/testing/uat/done/blocked/cancelled,
-                или None для всех.
-        assignee: claude / agent:<name> / user, или None для всех.
-        project_id: slug проекта (см. kanban_projects); None = все проекты.
+        status: one of backlog/approved/analyst/in_progress/testing/uat/done/blocked/cancelled,
+                or None for all.
+        assignee: claude / agent:<name> / user, or None for all.
+        project_id: project slug (see kanban_projects); None = all projects.
 
     Returns:
         {"ok": true, "data": {"tasks": [{...short fields}], "count": N}}
@@ -126,9 +126,9 @@ def kanban_list(
 
 @mcp.tool()
 def kanban_projects() -> dict[str, Any]:
-    """Список проектов с подсчётом задач по колонкам.
+    """List projects with task counts per column.
 
-    Используй в начале сессии, чтобы понять какие проекты есть.
+    Call this at the start of a session to learn which projects exist.
 
     Returns:
         {"ok": true, "data": {"projects": [
@@ -146,12 +146,13 @@ def kanban_projects() -> dict[str, Any]:
 
 @mcp.tool()
 def kanban_board(project_id: str) -> dict[str, Any]:
-    """Компактный обзор доски проекта: счётчики + первые 5 задач каждой колонки.
+    """Compact overview of a project board: counts + first 5 tasks per column.
 
-    Идеально для быстрого ответа «что в работе?» без перечисления всех 100+ задач.
+    Perfect for a quick "what's in progress?" answer without enumerating
+    all 100+ tasks.
 
     Args:
-        project_id: slug проекта (см. kanban_projects).
+        project_id: project slug (see kanban_projects).
     """
     try:
         proj = _get_store().get_project(project_id)
@@ -179,11 +180,11 @@ def kanban_board(project_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kanban_search(query: str, project_id: str | None = None) -> dict[str, Any]:
-    """Поиск задач по подстроке в title/description (case-insensitive).
+    """Search tasks by substring in title/description (case-insensitive).
 
     Args:
-        query: что искать; <2 символов отклоняется.
-        project_id: ограничить поиск проектом; None = все.
+        query: search term; rejected if shorter than 2 characters.
+        project_id: limit the search to one project; None = all.
     """
     if not query or len(query.strip()) < 2:
         return _err("query must be at least 2 characters")
@@ -205,13 +206,13 @@ def kanban_my_active(
     assignee: str = "claude",
     project_id: str | None = None,
 ) -> dict[str, Any]:
-    """Активные задачи указанного исполнителя — в analyst/in_progress/testing.
+    """Active tasks for the given assignee — in analyst/in_progress/testing.
 
-    Идеально как первый запрос в сессии: «что у меня сейчас в работе?»
+    Perfect as the first query of a session: "what am I working on right now?"
 
     Args:
         assignee: claude (default), agent:<name>, user, ...
-        project_id: slug проекта; None = все проекты.
+        project_id: project slug; None = all projects.
     """
     try:
         tasks = _get_store().list_tasks(assignee=assignee, project_id=project_id)
@@ -227,7 +228,7 @@ def kanban_my_active(
 
 @mcp.tool()
 def kanban_get(task_id: str) -> dict[str, Any]:
-    """Полная карточка задачи: описание, acceptance, links, history."""
+    """Full task card: description, acceptance, links, history."""
     try:
         t = _get_store().get_task(task_id)
     except Exception as e:
@@ -239,11 +240,12 @@ def kanban_get(task_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kanban_pull(task_id: str, assignee: str = "claude") -> dict[str, Any]:
-    """Атомарно «беру задачу» из Согласовано → Аналитика.
+    """Atomically "claim a task" from Approved → Analyst.
 
-    Условия: задача в статусе ``approved`` И assignee либо None, либо равен ``assignee``.
-    Если уже взята другим агентом — вернёт ошибку, попробуй другую задачу.
-    project_id берётся из самой задачи — указывать не нужно.
+    Conditions: the task must be in status ``approved`` AND its assignee
+    must be either None or equal to ``assignee``. If another agent has
+    already taken it, you get an error — try a different task. project_id
+    is taken from the task itself, so you do not need to provide it.
     """
     try:
         t = _get_store().pull_task(task_id, assignee=assignee)
@@ -261,13 +263,13 @@ def kanban_move(
     comment: str | None = None,
     actor: str = "claude",
 ) -> dict[str, Any]:
-    """Перевести задачу в новый статус.
+    """Move a task to a new status.
 
     Args:
         task_id: T-XXX
-        to_status: целевой статус (см. kanban_columns).
-        comment: опциональный комментарий, попадает в history.
-        actor: claude / agent:<name>; по умолчанию claude.
+        to_status: target status (see kanban_columns).
+        comment: optional comment, recorded in history.
+        actor: claude / agent:<name>; defaults to claude.
     """
     if to_status not in STATUSES:
         return _err(f"unknown status: {to_status}; valid: {STATUSES}")
@@ -286,9 +288,10 @@ def kanban_comment(
     text: str,
     actor: str = "claude",
 ) -> dict[str, Any]:
-    """Добавить коммент в history задачи.
+    """Add a comment to the task's history.
 
-    Полезно для записи плана при попадании в Аналитику, или результата теста.
+    Useful for recording the plan once the task lands in Analyst, or for
+    capturing a test result.
     """
     try:
         _get_store().add_comment(task_id, text, actor=actor)
@@ -311,16 +314,16 @@ def kanban_create(
     actor: str = "claude",
     project_id: str | None = None,
 ) -> dict[str, Any]:
-    """Новая карточка. По умолчанию в Бэклог; чтоб сразу в работу — status='in_progress'.
+    """Create a new card. Defaults to Backlog; for immediate work pass status='in_progress'.
 
     Args:
-        title: коротко в одну строку.
-        description: markdown с подробностями.
-        acceptance: критерии приёмки (что считается «сделано»).
+        title: a short single-line title.
+        description: markdown with the details.
+        acceptance: acceptance criteria (what counts as "done").
         priority: high / normal / low.
-        size: S (<30 мин) / M (<2 ч) / L (>2 ч).
-        project_id: slug проекта; None = дефолтный (см. KANBAN_DEFAULT_PROJECT_ID
-                    или KANBAN_PROJECT_ID env).
+        size: S (<30 min) / M (<2 h) / L (>2 h).
+        project_id: project slug; None = default (see KANBAN_DEFAULT_PROJECT_ID
+                    or KANBAN_PROJECT_ID env).
     """
     if status not in STATUSES:
         return _err(f"unknown status: {status}")
@@ -344,11 +347,11 @@ def kanban_create(
 
 @mcp.tool()
 def kanban_link(task_id: str, link_type: str, value: str) -> dict[str, Any]:
-    """Привязать ссылку (memory/file/pr/url) к задаче.
+    """Attach a link (memory/file/pr/url) to a task.
 
     Args:
         link_type: memory | file | pr | url
-        value: имя файла или url.
+        value: file name or URL.
     """
     if link_type not in {"memory", "file", "pr", "url"}:
         return _err(f"unknown link_type: {link_type}")
@@ -361,7 +364,7 @@ def kanban_link(task_id: str, link_type: str, value: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kanban_blockers(task_id: str, blocker_ids: list[str]) -> dict[str, Any]:
-    """Перезаписать список внутренних блокеров (зависимостей)."""
+    """Replace the list of internal blockers (dependencies)."""
     try:
         _get_store().set_blockers(task_id, blocker_ids)
     except Exception as e:
@@ -380,7 +383,7 @@ def kanban_update(
     external_blocker: str | None = None,
     actor: str = "claude",
 ) -> dict[str, Any]:
-    """Обновить любые поля карточки (кроме статуса/assignee — для них kanban_move/kanban_pull)."""
+    """Update any card fields (except status/assignee — use kanban_move/kanban_pull for those)."""
     try:
         t = _get_store().update_fields(
             task_id,

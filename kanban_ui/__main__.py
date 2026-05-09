@@ -1,4 +1,4 @@
-"""Entry-point: ``python -m kanban_ui`` — поднимает uvicorn на 127.0.0.1:7777."""
+"""Entry point: ``python -m kanban_ui`` — runs uvicorn on 127.0.0.1:7777."""
 import os
 
 import uvicorn

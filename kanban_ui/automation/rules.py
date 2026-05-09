@@ -1,30 +1,30 @@
-"""Rule engine: применяет правила из ``KANBAN_RULES_FILE``.
+"""Rule engine: applies rules from ``KANBAN_RULES_FILE``.
 
-Файл ``rules.json``::
+``rules.json`` file::
 
     {
       "rules": [
         {
-          "name": "Закрытые задачи в архив через 30 дней",
+          "name": "Archive done tasks after 30 days",
           "enabled": true,
           "project_id": null,
           "trigger": {"type": "task_idle", "status": "done", "days": 30},
           "action":  {"type": "move_to", "status": "cancelled",
-                      "comment": "Авто-архив: 30 дней в done"}
+                      "comment": "Auto-archive: 30 days in done"}
         }
       ]
     }
 
 Triggers:
-    - task_idle: status=X, days=N — задачи в колонке X дольше N дней
-    - task_count_in_status: status=X, gt=N | lt=N — счётчик задач в колонке
+    - task_idle: status=X, days=N — tasks that have been in column X for more than N days
+    - task_count_in_status: status=X, gt=N | lt=N — task counter in a column
 
 Actions:
-    - move_to: status=X, comment? — переместить в колонку
-    - add_comment: comment — записать в history
+    - move_to: status=X, comment? — move to a column
+    - add_comment: comment — record in history
     - set_priority: priority=high|normal|low, comment?
 
-Все мутации — actor=automation. Hot-reload по mtime файла.
+All mutations use actor=automation. Hot-reload by file mtime.
 """
 from __future__ import annotations
 
@@ -46,9 +46,9 @@ VALID_TRIGGERS = {"task_idle", "task_count_in_status", "task_moved"}
 VALID_ACTIONS = {"move_to", "add_comment", "set_priority", "run_command"}
 VALID_PRIORITIES = {"high", "normal", "low"}
 
-# Polling-mode триггеры обрабатываются в _run_once.
-# Reactive-mode триггеры обрабатываются в emit_rule_event() — вызывается
-# из endpoint'ов сразу после события, без дополнительного polling-задержки.
+# Polling-mode triggers are processed in _run_once.
+# Reactive-mode triggers are processed in emit_rule_event() — invoked from
+# the endpoints right after the event, without an extra polling delay.
 REACTIVE_TRIGGERS = {"task_moved"}
 
 _status: dict[str, Any] = {
@@ -57,9 +57,9 @@ _status: dict[str, Any] = {
     "interval_sec": DEFAULT_INTERVAL,
     "rules_loaded": 0,
     "last_run_at": None,
-    "last_run_actions": [],     # actions последнего прогона: {ts, rule, task_id, action}
-    "last_reactive": [],        # реактивные триггеры (task_moved): {ts, rule, task_id, action}
-    "last_errors": [],          # ошибки парсинга или применения: {ts, rule, error}
+    "last_run_actions": [],     # actions from the last run: {ts, rule, task_id, action}
+    "last_reactive": [],        # reactive triggers (task_moved): {ts, rule, task_id, action}
+    "last_errors": [],          # parsing or apply errors: {ts, rule, error}
     "config_mtime": None,
 }
 
@@ -73,7 +73,7 @@ def _now() -> datetime:
 
 
 def _parse_iso(s: str) -> datetime:
-    # ISO с offset (например "2026-05-08T13:38:14+00:00") или без — оба ОК.
+    # ISO with offset (e.g. "2026-05-08T13:38:14+00:00") or without — both fine.
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
@@ -102,7 +102,7 @@ def _validate_rule(rule: dict[str, Any], idx: int) -> list[str]:
             if "gt" not in t and "lt" not in t:
                 errs.append(f"{name}: trigger needs 'gt' or 'lt'")
         elif t["type"] == "task_moved":
-            # обязательно to_status, опционально from_status и project_id
+            # to_status is required, from_status and project_id are optional
             if t.get("to_status") not in STATUSES:
                 errs.append(f"{name}: task_moved.to_status invalid")
             if t.get("from_status") is not None and t.get("from_status") not in STATUSES:
@@ -166,10 +166,11 @@ def _apply_action(
     action: dict[str, Any],
     context: dict[str, Any] | None = None,
 ) -> str:
-    """Применяет action, возвращает короткое описание для лога.
+    """Applies an action and returns a short description for the log.
 
-    ``context`` — опциональный dict с данными для подстановки placeholders
-    в run_command (task_id, project_id, from_status, to_status, title).
+    ``context`` is an optional dict with values used to substitute
+    run_command placeholders (task_id, project_id, from_status,
+    to_status, title).
     """
     a_type = action["type"]
     comment = action.get("comment", "")
@@ -194,10 +195,11 @@ def _apply_action(
             store.add_comment(task_id, comment, actor="automation")
         return f"priority -> {action['priority']}"
     elif a_type == "run_command":
-        # Запуск в фоне, не ждём результата. context подставляется в args
-        # как {task_id}, {project_id}, {from_status}, {to_status}, {title}.
-        # Логи команды могут писать в "log_file" если указан.
-        # action.env (опц.) — словарь env-переменных для subprocess.
+        # Spawn in the background; do not wait for completion. context is
+        # substituted into args as {task_id}, {project_id}, {from_status},
+        # {to_status}, {title}.
+        # Command logs can be redirected to "log_file" when specified.
+        # action.env (optional) — dict of env vars for the subprocess.
         ctx = dict(context or {})
         ctx.setdefault("task_id", task_id)
         cmd = action["cmd"]
@@ -222,7 +224,7 @@ async def _spawn_command(
     ctx: dict[str, Any],
     env_extra: dict[str, Any] | None = None,
 ) -> None:
-    """Запускает subprocess в фоне, не блокируя вызывающую корутину."""
+    """Spawns a subprocess in the background without blocking the caller coroutine."""
     try:
         kw: dict[str, Any] = {}
         if log_file:
@@ -242,7 +244,7 @@ async def _spawn_command(
             "run_command spawned: pid=%d cmd=%s args=%s ctx=%s",
             proc.pid, cmd, args, ctx,
         )
-        # Не ждём завершения — agent-launcher может работать минуты/часы.
+        # Do not wait — an agent launcher may run for minutes/hours.
     except FileNotFoundError:
         log.error("run_command: cmd not found: %s", cmd)
         _status["last_errors"].insert(
@@ -262,7 +264,7 @@ async def _spawn_command(
 def _run_once(store: Store, rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     actions_log: list[dict[str, Any]] = []
     for rule in rules:
-        # reactive-rules не запускаются по таймеру — только через emit_rule_event
+        # reactive rules do not run on the timer — only through emit_rule_event
         if rule["trigger"]["type"] in REACTIVE_TRIGGERS:
             continue
         name = rule.get("name", "?")
@@ -305,10 +307,10 @@ _engine: "RuleEngine | None" = None
 
 
 def emit_rule_event(event: str, payload: dict[str, Any]) -> None:
-    """Реактивная обработка события (вызывается из endpoint'ов).
+    """Reactive event handling (invoked from endpoints).
 
-    Применяет все enabled rules с trigger.type=event, чьи фильтры
-    совпадают с payload. Сейчас поддерживается ``task_moved``:
+    Applies all enabled rules with trigger.type=event whose filters match
+    the payload. Currently ``task_moved`` is supported:
         payload = {"task": {...}, "from_status": "...", "to_status": "...",
                    "comment": "..." | None}
     """
@@ -363,10 +365,10 @@ def emit_rule_event(event: str, payload: dict[str, Any]) -> None:
 
 
 class RuleEngine:
-    """Async-loop, который раз в interval_sec прогоняет polling-rules.
+    """Async loop that runs polling-rules every interval_sec seconds.
 
-    Reactive-rules (task_moved) обрабатываются через emit_rule_event(),
-    вызываемый из endpoint'ов сразу после события.
+    Reactive rules (task_moved) are handled through emit_rule_event(),
+    which is invoked from the endpoints right after the event.
     """
 
     def __init__(self, store: Store, rules_file: Path, interval: float = DEFAULT_INTERVAL):

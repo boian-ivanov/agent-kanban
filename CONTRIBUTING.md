@@ -47,7 +47,7 @@ Schema doesn't need migration — `tasks.status` is a free-form TEXT column.
 ### Adding an env var
 
 1. Read it in code.
-2. Document in [`README.md`](README.md) under «Configuration» table.
+2. Document in [`README.md`](README.md) under the "Configuration" table.
 3. Mention in [`CONTRIBUTING.md`](CONTRIBUTING.md) only if it affects dev workflow.
 
 ### Adding a REST endpoint

@@ -1,30 +1,30 @@
-"""Inbox watcher: следит за папкой ``KANBAN_INBOX_DIR``, превращает
-``.md`` файлы в задачи. Работает через polling (без watchdog dep).
+"""Inbox watcher: monitors the ``KANBAN_INBOX_DIR`` directory and turns
+``.md`` files into tasks. Polling-based (no watchdog dependency).
 
-Формат файла — markdown с YAML frontmatter::
+File format — markdown with YAML frontmatter::
 
     ---
-    title: TTL для internal.* таблиц
+    title: TTL for internal.* tables
     project_id: default
     status: backlog
     priority: high
     size: M
-    external_blocker: DBA — нужно согласование
+    external_blocker: DBA — approval required
     links:
       - type: file
         value: etl/load_internal.sh
     ---
-    Описание задачи. Тело markdown идёт в `description`.
+    Task description. The markdown body goes into `description`.
 
     ## Acceptance criteria
-    - [ ] Все таблицы имеют TTL
-    - [ ] Старые партиции удалены
+    - [ ] All tables have TTL
+    - [ ] Old partitions are dropped
 
-После успешного импорта файл переезжает в ``inbox/processed/YYYY-MM-DD/``.
-При ошибке — в ``inbox/failed/`` с ``.error`` файлом-логом.
+After a successful import the file is moved to ``inbox/processed/YYYY-MM-DD/``.
+On error — to ``inbox/failed/`` with a ``.error`` log file alongside it.
 
-Все поля frontmatter опциональны. Если ``title`` отсутствует — берётся
-имя файла (без ``.md``, ``_`` → пробелы).
+All frontmatter fields are optional. If ``title`` is missing, the file name
+(without ``.md``, ``_`` → spaces) is used.
 """
 from __future__ import annotations
 
@@ -45,13 +45,13 @@ log = logging.getLogger("kanban.automation.inbox")
 
 POLL_INTERVAL = float(os.environ.get("KANBAN_INBOX_INTERVAL", "5"))
 
-# Заголовок acceptance — всё что под этим хедером уходит в task.acceptance.
+# Acceptance heading — everything below this header lands in task.acceptance.
 _ACCEPTANCE_RE = re.compile(
     r"^##+\s*(?:acceptance(?:\s+criteria)?|критерии\s+приёмки)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Простая статистика для status endpoint.
+# Lightweight stats for the status endpoint.
 _status: dict[str, Any] = {
     "running": False,
     "watch_dir": None,
@@ -59,8 +59,8 @@ _status: dict[str, Any] = {
     "last_scan_at": None,
     "imported_total": 0,
     "failed_total": 0,
-    "last_imports": [],   # последние 10 импортов: {ts, file, task_id}
-    "last_errors":  [],   # последние 10 ошибок:   {ts, file, error}
+    "last_imports": [],   # last 10 imports: {ts, file, task_id}
+    "last_errors":  [],   # last 10 errors:  {ts, file, error}
 }
 
 
@@ -84,7 +84,7 @@ def _slug_to_title(filename: str) -> str:
 
 
 def _parse_markdown(content: str) -> tuple[dict[str, Any], str]:
-    """Возвращает (frontmatter_dict, body)."""
+    """Returns (frontmatter_dict, body)."""
     if not content.startswith("---"):
         return {}, content
     end = content.find("\n---", 3)
@@ -102,13 +102,13 @@ def _parse_markdown(content: str) -> tuple[dict[str, Any], str]:
 
 
 def _split_acceptance(body: str) -> tuple[str, str]:
-    """Делит тело на (description, acceptance) по заголовку
-    ``## Acceptance criteria`` (или русскому аналогу)."""
+    """Splits the body into (description, acceptance) on the
+    ``## Acceptance criteria`` heading (or its Russian equivalent)."""
     m = _ACCEPTANCE_RE.search(body)
     if not m:
         return body.strip(), ""
     description = body[:m.start()].rstrip()
-    # acceptance — всё после этого заголовка до следующего # ## или конца файла
+    # acceptance — everything after this heading up to the next # ## or EOF
     rest = body[m.end():]
     next_header = re.search(r"^##+\s+\w", rest, re.MULTILINE)
     acceptance = (rest[:next_header.start()] if next_header else rest).strip()
@@ -116,7 +116,7 @@ def _split_acceptance(body: str) -> tuple[str, str]:
 
 
 def _import_file(store: Store, path: Path) -> str:
-    """Создаёт задачу из файла. Возвращает task_id."""
+    """Creates a task from the file. Returns task_id."""
     content = path.read_text(encoding="utf-8")
     fm, body = _parse_markdown(content)
     title = fm.get("title") or _slug_to_title(path.name)
@@ -157,7 +157,7 @@ def _move_to_processed(path: Path, root: Path) -> Path:
     dest_dir = root / "processed" / _today_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / path.name
-    # Если дубль — добавляем счётчик
+    # On collision, append a counter
     n = 1
     while dest.exists():
         n += 1
@@ -210,9 +210,9 @@ def _scan_once(store: Store, watch_dir: Path) -> None:
 
 
 class InboxWatcher:
-    """Async-loop, который раз в POLL_INTERVAL сканирует inbox.
+    """Async loop that scans the inbox every POLL_INTERVAL seconds.
 
-    Использование (см. lifespan):
+    Usage (see lifespan):
         watcher = InboxWatcher(store, watch_dir)
         task = asyncio.create_task(watcher.run())
         ...

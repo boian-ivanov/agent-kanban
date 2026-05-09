@@ -1,21 +1,21 @@
 /* FinOps Kanban frontend v2.
  * Multi-project (URL /p/{slug}), drag-drop, search+filter, collapsible cols,
- * compact mode, quick-add, keyboard shortcuts, polling /api/board каждые 10 сек.
+ * compact mode, quick-add, keyboard shortcuts, polling /api/board every 10 s.
  */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 const STATUS_TITLE = {
-  backlog: "Бэклог",
-  approved: "Согласовано",
-  analyst: "Аналитика",
-  in_progress: "В работе",
-  testing: "Тестирование",
-  uat: "Приёмка",
-  done: "Закрыто",
-  blocked: "Заблокировано",
-  cancelled: "Отменено",
+  backlog: "Backlog",
+  approved: "Approved",
+  analyst: "Analyst",
+  in_progress: "In progress",
+  testing: "Testing",
+  uat: "UAT",
+  done: "Done",
+  blocked: "Blocked",
+  cancelled: "Cancelled",
 };
 
 const LS = {
@@ -31,17 +31,17 @@ const LS = {
 
 const PROFILES = ["standard", "cyberpunk", "horizon"];
 const PROFILE_LABELS = {
-  standard: "Стандарт",
-  cyberpunk: "Киберпанк",
-  horizon:   "Горизонт",
+  standard: "Standard",
+  cyberpunk: "Cyberpunk",
+  horizon:   "Horizon",
 };
 
 // ----------------------------------------------------------- State
 
 const state = {
-  projectId: null,                  // выбирается из URL или первого проекта
-  project: null,                   // полные мета-данные текущего проекта
-  projects: [],                    // все проекты (active + archived)
+  projectId: null,                  // picked from URL or the first project
+  project: null,                   // full metadata for the current project
+  projects: [],                    // all projects (active + archived)
   board: { columns: [], tasks: {} },
   search: "",
   filters: new Set(),              // 'prio:high', 'blocked', 'assignee:claude', ...
@@ -93,7 +93,7 @@ function toast(msg, kind = "info") {
 
 function parseRoute() {
   const m = location.pathname.match(/^\/p\/([a-z][a-z0-9-]*)\/?$/);
-  return m ? m[1] : null;     // null = ещё не выбран, выберется первым проектом
+  return m ? m[1] : null;     // null = not picked yet, will fall back to first project
 }
 
 function navigateTo(projectId, { replace = false } = {}) {
@@ -158,7 +158,7 @@ function projectEl(p) {
     <span class="proj__mark" style="background:${escapeHTML(p.color)}">${escapeHTML((p.icon || p.name[0] || "?").toUpperCase().slice(0,2))}</span>
     <span class="proj__name">${escapeHTML(p.name)}</span>
     <span class="proj__count">${p.total_tasks || 0}</span>
-    <button class="proj__menu" title="Редактировать" aria-label="Редактировать">⋯</button>
+    <button class="proj__menu" title="Edit" aria-label="Edit">⋯</button>
   `;
   a.addEventListener("click", (e) => {
     if (e.target.closest(".proj__menu")) {
@@ -204,7 +204,7 @@ function render(board) {
         <span class="col__chevron">▾</span>
         <span class="col__title">${escapeHTML(col.title)}</span>
         <span class="col__count">${list.length}</span>
-        <button class="col__quickadd" title="Быстро добавить (n)" aria-label="Добавить">+</button>
+        <button class="col__quickadd" title="Quick add (n)" aria-label="Add">+</button>
       </header>
       <div class="col__list" data-status="${col.id}"></div>
     `;
@@ -232,7 +232,7 @@ function render(board) {
     });
     colEl.querySelector(".col__quickadd").addEventListener("click", (e) => {
       e.stopPropagation();
-      // Если колонка свёрнута — сначала развернём, потом откроем quickadd
+      // If the column is collapsed — expand first, then open quickadd
       if (colEl.classList.contains("is-collapsed")) {
         toggleColCollapse(col.id, list.length > 0);
         setTimeout(() => openQuickAdd(col.id, colEl), 220);
@@ -246,7 +246,7 @@ function render(board) {
   // stats
   const filterLabel = (state.search || state.filters.size > 0)
     ? `${visible} / ${total}` : `${total}`;
-  $("#stats").textContent = `${filterLabel} задач`;
+  $("#stats").textContent = `${filterLabel} tasks`;
 }
 
 function cardEl(t) {
@@ -297,7 +297,7 @@ function matchesFilters(t) {
 }
 
 function applyFilters() {
-  // hide/unhide карточки без полного re-render (быстрее)
+  // hide/unhide cards without a full re-render (faster)
   let visible = 0; let total = 0;
   for (const col of state.board.columns) {
     const tasks = state.board.tasks[col.id] || [];
@@ -315,18 +315,18 @@ function applyFilters() {
   }
   const filterLabel = (state.search || state.filters.size > 0)
     ? `${visible} / ${total}` : `${total}`;
-  $("#stats").textContent = `${filterLabel} задач`;
+  $("#stats").textContent = `${filterLabel} tasks`;
 }
 
 // ----------------------------------------------------------- Collapsed columns
 //
-// Логика «эффективно свёрнута»:
-//   - manually collapsed (в collapsedCols) → ВСЕГДА свёрнута
-//   - manually expanded (в expandedCols)   → ВСЕГДА развёрнута
-//   - default: пустая колонка → свёрнута, непустая → развёрнута
+// "Effectively collapsed" logic:
+//   - manually collapsed (in collapsedCols) → ALWAYS collapsed
+//   - manually expanded (in expandedCols)   → ALWAYS expanded
+//   - default: empty column → collapsed, non-empty → expanded
 //
-// Это даёт автосворачивание пустых, но respect'ит явный выбор пользователя
-// (клик по шапке).
+// This auto-collapses empty columns but still respects an explicit user choice
+// (click on the header).
 
 function isColEffectivelyCollapsed(colId, hasTasks) {
   const proj = state.projectId;
@@ -343,13 +343,13 @@ function toggleColCollapse(colId, hasTasks) {
   const expandedList = state.expandedCols[proj] || [];
   const wasCollapsed = isColEffectivelyCollapsed(colId, hasTasks);
 
-  // удаляем colId из обоих списков (для чистоты)
+  // remove colId from both lists (for cleanliness)
   const cIdx = collapsedList.indexOf(colId);
   if (cIdx >= 0) collapsedList.splice(cIdx, 1);
   const eIdx = expandedList.indexOf(colId);
   if (eIdx >= 0) expandedList.splice(eIdx, 1);
 
-  // добавляем в противоположный
+  // add to the opposite list
   if (wasCollapsed) expandedList.push(colId);
   else              collapsedList.push(colId);
 
@@ -364,12 +364,12 @@ function toggleColCollapse(colId, hasTasks) {
 // ----------------------------------------------------------- Quick-add
 
 function openQuickAdd(status, colEl) {
-  // Если уже есть quickadd-form — фокус
+  // If a quickadd-form already exists — focus it
   let form = colEl.querySelector(".col__quickadd-form");
   if (form) { form.querySelector("input").focus(); return; }
   form = document.createElement("div");
   form.className = "col__quickadd-form";
-  form.innerHTML = `<input type="text" placeholder="Заголовок (Enter — создать, Esc — отмена)" />`;
+  form.innerHTML = `<input type="text" placeholder="Title (Enter — create, Esc — cancel)" />`;
   const list = colEl.querySelector(".col__list");
   colEl.insertBefore(form, list);
   const input = form.querySelector("input");
@@ -386,12 +386,12 @@ function openQuickAdd(status, colEl) {
           size: "M",
           project_id: state.projectId,
         });
-        toast("Создано");
+        toast("Created");
         form.remove();
         await loadBoard();
         await loadProjects();
       } catch (err) {
-        toast(`Ошибка: ${err.message}`, "err");
+        toast(`Error: ${err.message}`, "err");
       }
     } else if (e.key === "Escape") {
       form.remove();
@@ -408,7 +408,7 @@ async function handleDrop(evt) {
   setTimeout(() => { state.isDragging = false; }, 80);
   const taskId = evt.item.dataset.taskId;
   const toStatus = evt.to.dataset.status;
-  // newDraggableIndex среди не-скрытых; но мы передаём newIndex относительно всех элементов
+  // newDraggableIndex is among non-hidden; we pass newIndex relative to all elements
   const newOrder = evt.newDraggableIndex;
   try {
     await api("POST", `/api/tasks/${taskId}/move`, {
@@ -419,7 +419,7 @@ async function handleDrop(evt) {
     await loadBoard();
     await loadProjects();
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "err");
+    toast(`Error: ${e.message}`, "err");
     await loadBoard();
   }
 }
@@ -431,7 +431,7 @@ async function openTaskModal(taskId) {
   try {
     t = await api("GET", `/api/tasks/${taskId}`);
   } catch (e) {
-    toast(`Не удалось загрузить ${taskId}`, "err");
+    toast(`Failed to load ${taskId}`, "err");
     return;
   }
   $("#modal").dataset.taskId = t.id;
@@ -482,7 +482,7 @@ function renderHistory(history) {
     el.appendChild(row);
   }
   if (!history || !history.length) {
-    el.innerHTML = `<span class="h-text" style="color: var(--muted)">пусто</span>`;
+    el.innerHTML = `<span class="h-text" style="color: var(--muted)">empty</span>`;
   }
 }
 
@@ -504,11 +504,11 @@ async function saveModal() {
   };
   try {
     await api("PATCH", `/api/tasks/${taskId}`, payload);
-    toast(`${taskId} сохранена`);
+    toast(`${taskId} saved`);
     closeModal();
     await loadBoard();
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "err");
+    toast(`Error: ${e.message}`, "err");
   }
 }
 
@@ -524,7 +524,7 @@ async function addLink() {
     const t = await api("GET", `/api/tasks/${taskId}`);
     renderLinks(t.links);
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "err");
+    toast(`Error: ${e.message}`, "err");
   }
 }
 
@@ -539,7 +539,7 @@ async function addComment() {
     const t = await api("GET", `/api/tasks/${taskId}`);
     renderHistory(t.history);
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "err");
+    toast(`Error: ${e.message}`, "err");
   }
 }
 
@@ -564,7 +564,7 @@ function closeNewModal() {
 async function createTask() {
   const title = $("#n-title").value.trim();
   if (!title) {
-    toast("Заголовок обязателен", "err");
+    toast("Title is required", "err");
     return;
   }
   const payload = {
@@ -578,22 +578,22 @@ async function createTask() {
   };
   try {
     const t = await api("POST", `/api/tasks`, payload);
-    toast(`${t.id} создана`);
+    toast(`${t.id} created`);
     closeNewModal();
     await loadBoard();
     await loadProjects();
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "err");
+    toast(`Error: ${e.message}`, "err");
   }
 }
 
 // ----------------------------------------------------------- Project modal (create + edit)
 
-// editingProjId — null когда создаём новый, иначе id редактируемого проекта.
+// editingProjId — null when creating a new project, otherwise id of the project being edited.
 let editingProjId = null;
-// activeSourceTab — какой таб источника задач выбран в wizard ('new'|'local'|'git').
+// activeSourceTab — which task-source tab is selected in the wizard ('new'|'local'|'git').
 let activeSourceTab = "new";
-// selectedPlanFiles — Set путей выбранных plan-файлов в текущей сессии wizard'а.
+// selectedPlanFiles — Set of plan-file paths selected in the current wizard session.
 let selectedPlanFiles = new Set();
 
 function resetSourceWizard() {
@@ -633,10 +633,10 @@ function _humanSize(n) {
 function _humanTime(ts) {
   const now = Date.now() / 1000;
   const diff = now - ts;
-  if (diff < 60)        return "только что";
-  if (diff < 3600)      return `${Math.floor(diff / 60)} мин назад`;
-  if (diff < 86400)     return `${Math.floor(diff / 3600)} ч назад`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} дн назад`;
+  if (diff < 60)        return "just now";
+  if (diff < 3600)      return `${Math.floor(diff / 60)} min ago`;
+  if (diff < 86400)     return `${Math.floor(diff / 3600)} h ago`;
+  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} d ago`;
   return new Date(ts * 1000).toISOString().slice(0, 10);
 }
 
@@ -646,36 +646,36 @@ async function loadPlanCandidates() {
   if (!path) {
     box.innerHTML = `
       <div class="src-candidates__empty">
-        Сначала укажи директорию проекта.<br>
-        <button type="button" class="btn btn--ghost" data-action="pick-folder" style="margin-top:8px;">Указать директорию…</button>
+        First specify the project directory.<br>
+        <button type="button" class="btn btn--ghost" data-action="pick-folder" style="margin-top:8px;">Specify directory…</button>
       </div>`;
     return;
   }
-  box.innerHTML = '<div class="src-candidates__empty">Сканирую…</div>';
+  box.innerHTML = '<div class="src-candidates__empty">Scanning…</div>';
   try {
-    // Всегда используем path из input — в edit-режиме user мог только что
-    // выбрать новый путь через picker, а в БД он ещё не сохранён.
+    // Always use path from input — in edit mode the user may have just
+    // picked a new path via the picker, and it isn't saved to the DB yet.
     const r = await api("GET", `/api/system/list-md-files?path=${encodeURIComponent(path)}`);
     if (!r.items || r.items.length === 0) {
-      box.innerHTML = `<div class="src-candidates__empty">Md-файлов в директории не нашёл. Используй «Выбрать другой файл…» ниже.</div>`;
+      box.innerHTML = `<div class="src-candidates__empty">No .md files found in the directory. Use "Choose another folder…" below.</div>`;
       $("#src-local-file").value = "";
       return;
     }
     renderCandidates(r.items);
   } catch (e) {
-    box.innerHTML = `<div class="src-candidates__empty">Ошибка: ${escapeHTML(e.message)}</div>`;
+    box.innerHTML = `<div class="src-candidates__empty">Error: ${escapeHTML(e.message)}</div>`;
   }
 }
 
 function renderCandidates(items) {
   const box = $("#src-candidates");
   box.innerHTML = "";
-  // Авто-выбор всех plan-файлов (prio ≤ 5: PLAN/BACKLOG/TASKS/TODO/ROADMAP).
-  // CLAUDE.md/README.md/etc. — pruio 7+, не отмечены.
+  // Auto-select all plan-files (prio ≤ 5: PLAN/BACKLOG/TASKS/TODO/ROADMAP).
+  // CLAUDE.md/README.md/etc. are prio 7+, left unchecked.
   selectedPlanFiles = new Set(
     items.filter(it => it.prio <= 5).map(it => it.file)
   );
-  // Если ни один не подошёл (всё низкоприоритетное) — отметим первый чтоб не было пусто.
+  // If none qualify (all low-priority) — check the first so the wizard isn't empty.
   if (selectedPlanFiles.size === 0 && items.length > 0) {
     selectedPlanFiles.add(items[0].file);
   }
@@ -715,19 +715,19 @@ function toggleCandidate(file) {
 
 function _updateCandidatesCounter() {
   const counter = $("#src-candidates-counter");
-  if (counter) counter.textContent = `Выбрано: ${selectedPlanFiles.size}`;
+  if (counter) counter.textContent = `Selected: ${selectedPlanFiles.size}`;
 }
 
 
 async function showCurrentSource(projectId) {
-  // Запросить текущий source проекта (если есть). 404 = нет.
+  // Fetch the project's current source (if any). 404 = none.
   try {
     const src = await api("GET", `/api/projects/${projectId}/source`);
     let label;
     if (src.type === "plan_md") {
       const files = src.config.files || (src.config.file ? [src.config.file] : []);
       label = files.length > 0
-        ? `Plan-файлы (${files.length}): ${files.join(", ")}`
+        ? `Plan files (${files.length}): ${files.join(", ")}`
         : `Plan: ${JSON.stringify(src.config)}`;
     } else if (src.type === "git") {
       label = `Git: ${src.config.repo_url}`;
@@ -744,8 +744,8 @@ async function showCurrentSource(projectId) {
 
 function openNewProj() {
   editingProjId = null;
-  $("#proj-modal-title").textContent = "Новый проект";
-  $("#btn-create-proj").textContent = "Создать";
+  $("#proj-modal-title").textContent = "New project";
+  $("#btn-create-proj").textContent = "Create";
   $("#p-name").value = "";
   $("#p-id").value = "";
   $("#p-id").disabled = false;
@@ -758,11 +758,11 @@ function openNewProj() {
 
 function openEditProj(p) {
   editingProjId = p.id;
-  $("#proj-modal-title").textContent = `Проект: ${p.name}`;
-  $("#btn-create-proj").textContent = "Сохранить";
+  $("#proj-modal-title").textContent = `Project: ${p.name}`;
+  $("#btn-create-proj").textContent = "Save";
   $("#p-name").value = p.name;
   $("#p-id").value = p.id;
-  $("#p-id").disabled = true;     // id неизменяем (FK на tasks)
+  $("#p-id").disabled = true;     // id is immutable (FK on tasks)
   $("#p-path").value = p.path || "";
   $$(".swatch").forEach(s => s.classList.toggle("is-active", s.dataset.color === p.color));
   resetSourceWizard();
@@ -782,15 +782,15 @@ async function saveProj() {
   const path = $("#p-path").value.trim();
   const colorEl = $(".swatch.is-active");
   const color = colorEl ? colorEl.dataset.color : "#F10D30";
-  // Иконка автогенерируется из первой буквы имени; backend сделает то же
-  // если icon пустой (см. Store.create_project).
+  // The icon is auto-generated from the first letter of the name; the
+  // backend does the same when icon is empty (see Store.create_project).
   const icon = "";
-  if (!name) { toast("Название обязательно", "err"); return; }
+  if (!name) { toast("Name is required", "err"); return; }
 
-  // Pre-validation: для типов new/local нужен path. Иначе wizard ничего не сделает —
-  // и пользователь получит пустой канбан, как было с Aizav2.
+  // Pre-validation: types new/local require a path. Otherwise the wizard does
+  // nothing and the user ends up with an empty board (as happened with Aizav2).
   if ((activeSourceTab === "new" || activeSourceTab === "local") && !path) {
-    toast("Сначала укажи директорию проекта (поле «Директория проекта»)", "err");
+    toast("First specify the project directory (field \"Project directory\")", "err");
     $("#p-path").focus();
     $("#p-path").classList.add("field--error");
     setTimeout(() => $("#p-path").classList.remove("field--error"), 2000);
@@ -798,14 +798,14 @@ async function saveProj() {
   }
   if (activeSourceTab === "local") {
     if (selectedPlanFiles.size === 0) {
-      toast("Отметь хотя бы один файл планов галочкой", "err");
+      toast("Tick at least one plan file", "err");
       return;
     }
   }
   if (activeSourceTab === "git") {
     const url = $("#src-git-url").value.trim();
     if (!url) {
-      toast("Укажи URL репозитория (или переключись на другой источник)", "err");
+      toast("Enter the repository URL (or switch to another source)", "err");
       $("#src-git-url").focus();
       return;
     }
@@ -817,20 +817,20 @@ async function saveProj() {
     try {
       await api("PATCH", `/api/projects/${editingProjId}`, { name, color, icon, path });
     } catch (e) {
-      toast(`Ошибка: ${e.message}`, "err");
+      toast(`Error: ${e.message}`, "err");
       return;
     }
   } else {
-    if (!id) { toast("ID обязателен", "err"); return; }
+    if (!id) { toast("ID is required", "err"); return; }
     if (!/^[a-z][a-z0-9-]{1,31}$/.test(id)) {
-      toast("ID: latin lowercase, 2-32 символа", "err");
+      toast("ID: latin lowercase, 2-32 characters", "err");
       return;
     }
     try {
       await api("POST", "/api/projects", { id, name, color, icon, path });
       savedId = id;
     } catch (e) {
-      toast(`Ошибка: ${e.message}`, "err");
+      toast(`Error: ${e.message}`, "err");
       return;
     }
   }
@@ -838,7 +838,7 @@ async function saveProj() {
   // Setup source
   const sourceResult = await applySourceWizard(savedId, path);
 
-  toast(editingProjId ? `Проект ${name} сохранён${sourceResult ? " · " + sourceResult : ""}` : `Проект ${name} создан${sourceResult ? " · " + sourceResult : ""}`);
+  toast(editingProjId ? `Project ${name} saved${sourceResult ? " · " + sourceResult : ""}` : `Project ${name} created${sourceResult ? " · " + sourceResult : ""}`);
   closeNewProj();
   await loadProjects();
   if (!editingProjId) navigateTo(savedId);
@@ -846,46 +846,46 @@ async function saveProj() {
   renderSidebar();
 }
 
-// Apply source-wizard outcome для проекта `projectId`. Возвращает короткое
-// описание для toast или null если ничего не делали.
+// Apply the source-wizard outcome for `projectId`. Returns a short
+// description for the toast, or null if nothing was done.
 async function applySourceWizard(projectId, path) {
   const tab = activeSourceTab;
-  // Для типов new/local нужен path. Для git — нет.
+  // Types new/local need a path. Git does not.
   if ((tab === "new" || tab === "local") && !path) {
-    return null;          // пользователь не указал директорию — пропустим setup
+    return null;          // user did not specify a directory — skip setup
   }
   try {
     if (tab === "new") {
       const r = await api("POST", `/api/projects/${projectId}/source/plan-new`);
-      return `создан ${r.plan_md.split("/").pop()}`;
+      return `created ${r.plan_md.split("/").pop()}`;
     }
     if (tab === "local") {
       const files = Array.from(selectedPlanFiles);
       if (files.length === 0) return null;
       const r = await api("POST", `/api/projects/${projectId}/source/plan-local`, { files });
       const c = r.imported || {};
-      return `импорт из ${files.length} файл(а): создано ${c.created || 0}, пропущено ${c.skipped || 0}`;
+      return `imported from ${files.length} file(s): ${c.created || 0} created, ${c.skipped || 0} skipped`;
     }
     if (tab === "git") {
       const repo_url = $("#src-git-url").value.trim();
       const token = $("#src-git-token").value;
       if (!repo_url) return null;
       await api("POST", `/api/projects/${projectId}/source/git`, { repo_url, token });
-      return token ? "git подключён · токен сохранён" : "git подключён";
+      return token ? "git connected · token saved" : "git connected";
     }
   } catch (e) {
-    toast(`Источник задач: ${e.message}`, "err");
+    toast(`Task source: ${e.message}`, "err");
   }
   return null;
 }
 
-// Открыть нативный picker папки (macOS Finder / Linux zenity / Windows FBD).
+// Open the native folder picker (macOS Finder / Linux zenity / Windows FBD).
 async function pickFolder() {
   const btn = $("#btn-pick-folder");
   if (btn) {
     btn.disabled = true;
     btn.dataset.oldText = btn.textContent;
-    btn.textContent = "Открываю…";
+    btn.textContent = "Opening…";
   }
   try {
     const r = await api("POST", "/api/system/pick-folder");
@@ -893,24 +893,24 @@ async function pickFolder() {
     if (r.path) {
       $("#p-path").value = r.path;
       $("#p-path").classList.remove("field--error");
-      // Если активен local — перезагрузим candidates с новым path.
+      // If local is active — reload candidates with the new path.
       if (activeSourceTab === "local") loadPlanCandidates();
     }
   } catch (e) {
     if (String(e.message).includes("HTTP 501")) {
-      toast("Нативный picker недоступен — введите путь руками", "err");
+      toast("Native picker not available — enter the path manually", "err");
     } else {
       toast(`Picker: ${e.message}`, "err");
     }
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = btn.dataset.oldText || "Выбрать…";
+      btn.textContent = btn.dataset.oldText || "Choose…";
     }
   }
 }
 
-// Auto-fill id from name (только в режиме создания)
+// Auto-fill id from name (only in create mode)
 function autoFillProjId() {
   if (editingProjId) return;
   const idInput = $("#p-id");
@@ -930,7 +930,7 @@ async function snapshot() {
     const r = await api("POST", `/api/snapshot`);
     toast(`Snapshot → ${r.path.split("/").pop()}`);
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "err");
+    toast(`Error: ${e.message}`, "err");
   }
 }
 
@@ -968,34 +968,34 @@ async function refreshClaudeAuth() {
     btn.classList.remove("claude-auth--ok", "claude-auth--no", "claude-auth--unknown", "is-busy");
     if (!r.available) {
       btn.classList.add("claude-auth--no");
-      btn.title = "Claude CLI не найден — установите Claude Code";
+      btn.title = "Claude CLI not found — install Claude Code";
     } else if (r.loggedIn) {
       btn.classList.add("claude-auth--ok");
-      btn.title = `Claude CLI: залогинен (${r.authMethod || "ok"})`;
+      btn.title = `Claude CLI: signed in (${r.authMethod || "ok"})`;
     } else {
       btn.classList.add("claude-auth--no");
-      btn.title = "Claude CLI: НЕ залогинен — клик для входа";
+      btn.title = "Claude CLI: NOT signed in — click to log in";
     }
   } catch (e) {
     btn.classList.remove("claude-auth--ok", "claude-auth--unknown");
     btn.classList.add("claude-auth--no");
-    btn.title = `Не удалось проверить: ${e.message}`;
+    btn.title = `Status check failed: ${e.message}`;
   }
 }
 
 async function clickClaudeAuth() {
   const btn = $("#btn-claude-auth");
   if (!btn) return;
-  // Если уже залогинен — клик ничего не делает (только тост со статусом).
+  // If already signed in — click does nothing (just a status toast).
   if (btn.classList.contains("claude-auth--ok")) {
-    toast("Claude CLI залогинен");
+    toast("Claude CLI is signed in");
     return;
   }
   btn.classList.add("is-busy");
   try {
     const r = await api("POST", "/api/system/claude-auth-login");
-    toast(`Запущен браузерный логин (pid ${r.pid}). Заверши OAuth и подожди ~10 сек.`);
-    // Через 10/30/60 сек повторно опрашиваем.
+    toast(`Browser login launched (pid ${r.pid}). Finish OAuth and wait ~10 s.`);
+    // Re-poll after 10/30/60 s.
     [10, 25, 60].forEach(sec => setTimeout(refreshClaudeAuth, sec * 1000));
   } catch (e) {
     toast(`Auth login: ${e.message}`, "err");
@@ -1011,7 +1011,7 @@ function toggleProfile() {
   const next = PROFILES[(idx + 1) % PROFILES.length];
   document.documentElement.setAttribute("data-profile", next);
   localStorage.setItem(LS.PROFILE, next);
-  toast(`Профиль: ${PROFILE_LABELS[next]}`);
+  toast(`Profile: ${PROFILE_LABELS[next]}`);
 }
 
 // ----------------------------------------------------------- Loaders
@@ -1022,7 +1022,7 @@ async function loadProjects() {
     state.projects = r.projects;
     renderSidebar();
   } catch (e) {
-    toast(`Не удалось загрузить проекты: ${e.message}`, "err");
+    toast(`Failed to load projects: ${e.message}`, "err");
   }
 }
 
@@ -1037,16 +1037,16 @@ async function loadBoard() {
     render(board);
   } catch (e) {
     if (String(e.message).includes("HTTP 404")) {
-      // Проект не найден — переходим на первый доступный
+      // Project not found — fall back to the first available
       const fallback = state.projects.find(p => !p.archived);
       if (fallback && fallback.id !== state.projectId) {
         navigateTo(fallback.id, { replace: true });
         await loadBoard();
       } else {
-        toast("Нет доступных проектов", "err");
+        toast("No projects available", "err");
       }
     } else {
-      toast(`Сеть: ${e.message}`, "err");
+      toast(`Network: ${e.message}`, "err");
     }
   }
 }
@@ -1092,8 +1092,8 @@ function initMiddleClickPan() {
   let startScrollLeft = 0;
 
   board.addEventListener("mousedown", (e) => {
-    if (e.button !== 1) return;     // только средняя кнопка
-    e.preventDefault();             // блокируем native autoscroll-cursor
+    if (e.button !== 1) return;     // middle button only
+    e.preventDefault();             // suppress the native autoscroll cursor
     panning = true;
     startX = e.clientX;
     startScrollLeft = board.scrollLeft;
@@ -1117,7 +1117,7 @@ function initMiddleClickPan() {
   document.addEventListener("mouseup", (e) => {
     if (e.button === 1) stop();
   });
-  // Если фокус ушёл с окна — тоже отпускаем
+  // Release if the window loses focus
   window.addEventListener("blur", stop);
 }
 
@@ -1144,7 +1144,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#btn-profile").addEventListener("click", toggleProfile);
   $("#btn-claude-auth").addEventListener("click", clickClaudeAuth);
   $("#btn-sidebar").addEventListener("click", toggleSidebar);
-  // Initial claude auth state + periodic refresh каждые 60 сек
+  // Initial claude auth state + periodic refresh every 60 s
   refreshClaudeAuth();
   setInterval(refreshClaudeAuth, 60000);
   $("#btn-new-proj").addEventListener("click", openNewProj);
@@ -1153,14 +1153,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   $$(".source-tab").forEach(t =>
     t.addEventListener("click", () => selectSourceTab(t.dataset.source))
   );
-  // При смене path — перезапросить кандидатов (если активен local-режим)
+  // On path change — refetch candidates (if local mode is active)
   $("#p-path").addEventListener("change", () => {
     if (activeSourceTab === "local") loadPlanCandidates();
   });
 
-  // Делегированный обработчик кликов по [data-action="..."] — работает
-  // и для динамически вставленных кнопок (inline в src-candidates__empty),
-  // и при перерисовках pane.
+  // Delegated click handler for [data-action="..."] — works for
+  // dynamically inserted buttons (inline in src-candidates__empty)
+  // and across pane re-renders.
   document.body.addEventListener("click", (e) => {
     const target = e.target.closest("[data-action]");
     if (!target) return;
@@ -1235,8 +1235,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Middle-click panning: зажми колёсико на доске и таскай влево/вправо.
-  // Не конфликтует с SortableJS drag-drop (тот реагирует на левую кнопку).
+  // Middle-click panning: hold the wheel on the board and drag left/right.
+  // Does not conflict with SortableJS drag-drop (which reacts to left-click).
   initMiddleClickPan();
 
   // Browser back/forward
@@ -1249,12 +1249,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Initial load: сначала проекты, потом выбор + доска
+  // Initial load: projects first, then select + board
   await loadProjects();
   if (!state.projectId && state.projects.length > 0) {
-    // URL без /p/X — приоритет:
-    // 1) последний открытый из localStorage (если ещё существует и не архивирован)
-    // 2) первый активный проект
+    // URL without /p/X — priority:
+    // 1) last opened from localStorage (if it still exists and isn't archived)
+    // 2) first active project
     const last = localStorage.getItem(LS.LAST_PROJECT);
     const lastP = last && state.projects.find(p => p.id === last && !p.archived);
     const first = lastP || state.projects.find(p => !p.archived) || state.projects[0];

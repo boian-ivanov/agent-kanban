@@ -72,7 +72,7 @@ def dispatch(name: str, args: dict) -> dict:
     if name == "kanban_list":
         r = httpx.get(f"{KANBAN}/api/board", params={"project": args["project_id"]})
         r.raise_for_status()
-        # сжимаем response чтобы не съесть контекст модели
+        # shrink the response so it does not eat the model's context
         data = r.json()
         return {
             "project": data.get("project", {}).get("name"),

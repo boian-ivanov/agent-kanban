@@ -1,11 +1,11 @@
 /* Kanban — premium minimal style.
- * Без эмодзи. Navy фон в dark, белый в light, красный (#F10D30) акцент.
- * v2: sidebar с проектами, collapsible columns, compact-mode, search/filter-chips,
+ * No emoji. Navy background in dark, white in light, red (#F10D30) accent.
+ * v2: sidebar with projects, collapsible columns, compact mode, search/filter chips,
  * theme switcher (data-theme="light").
  */
 
 :root {
-  /* Базовая палитра (одинакова в обеих темах) */
+  /* Base palette (identical across both themes) */
   --red:      #F10D30;
   --red-soft: rgba(241, 13, 48, 0.10);
   --accent-soft: rgba(241, 13, 48, 0.14);
@@ -20,23 +20,23 @@
   --sidebar-w-collapsed: 56px;
   --topbar-h: 60px;
 
-  /* Темо-зависимые переменные (по умолчанию — dark) */
-  --bg-app:        #0A1932;   /* фон страницы / search input */
+  /* Theme-dependent variables (default — dark) */
+  --bg-app:        #0A1932;   /* page background / search input */
   --bg-panel:      #102444;   /* sidebar / topbar */
-  --bg-col:        #102444;   /* колонка (в dark = panel, в light отличается) */
+  --bg-col:        #102444;   /* column (in dark = panel, differs in light) */
   --bg-panel-2:    #16315A;   /* active proj / count badge / chip--assignee / toast */
-  --bg-panel-hover:#143157;   /* hover на panel-элементах */
+  --bg-panel-hover:#143157;   /* hover on panel elements */
   --bg-hover-overlay: rgba(255, 255, 255, 0.06);
   --line:          rgba(255, 255, 255, 0.08);
   --line-strong:   rgba(255, 255, 255, 0.18);
-  --fg:            #E6ECF5;   /* основной текст на panel */
-  --fg-strong:     #FFFFFF;   /* заголовки на panel */
-  --fg-muted:      #94A3B8;   /* приглушённый текст на panel */
+  --fg:            #E6ECF5;   /* primary text on panel */
+  --fg-strong:     #FFFFFF;   /* headings on panel */
+  --fg-muted:      #94A3B8;   /* muted text on panel */
   --backdrop:      rgba(10, 25, 50, 0.55);
 
-  /* Карточки — фиксированная светлая поверхность в обеих темах
-   * (карточки задач — белые везде, как стикеры на стене).
-   * В dark они контрастируют с тёмной доской, в light — с серой. */
+  /* Cards — fixed light surface across both themes
+   * (task cards are white everywhere, like sticky notes on a wall).
+   * In dark they contrast with the dark board; in light, with the grey one. */
   --card-bg:  #FFFFFF;
   --card-bg-2:#F7F9FC;
   --card-line:#E5E9F0;
@@ -461,7 +461,7 @@ button { font: inherit; }
 }
 .btn--icon:hover { color: var(--fg-strong); border-color: var(--line-strong); background: var(--bg-hover-overlay); }
 
-/* Claude auth indicator — иконка C в квадрате; цвет зависит от auth state */
+/* Claude auth indicator — letter C in a square; color depends on auth state */
 .claude-auth { padding: 0; overflow: hidden; }
 .claude-auth__mark {
   display: inline-flex;
@@ -475,7 +475,7 @@ button { font: inherit; }
   font-size: 12px;
   letter-spacing: 0;
   color: #FFFFFF;
-  background: var(--fg-muted);     /* default: серый = unknown */
+  background: var(--fg-muted);     /* default: grey = unknown */
   transition: background 0.15s;
 }
 .claude-auth--ok .claude-auth__mark   { background: #cc785c; }   /* Claude orange */
@@ -491,7 +491,7 @@ button { font: inherit; }
   50%      { opacity: 1; }
 }
 
-/* На белом фоне (модалка) */
+/* On white backgrounds (modal) */
 .modal__panel .btn--icon {
   border-color: transparent;
   color: var(--muted);
@@ -607,7 +607,7 @@ button { font: inherit; }
 }
 
 .col__list:empty::after {
-  content: "Перетащи сюда";
+  content: "Drop here";
   display: block;
   text-align: center;
   font-size: 12px;
@@ -620,7 +620,7 @@ button { font: inherit; }
   opacity: 0.5;
 }
 
-/* Collapsed columns: вертикальная полоска с заголовком */
+/* Collapsed columns: vertical strip with the title */
 .col.is-collapsed {
   flex: 0 0 var(--col-w-collapsed);
   min-width: var(--col-w-collapsed);
@@ -715,7 +715,7 @@ button { font: inherit; }
   padding-left: 8px;
 }
 
-/* Compact mode — для досок с 100+ задач */
+/* Compact mode — for boards with 100+ tasks */
 .board.is-compact .card { padding: 6px 10px; gap: 2px; }
 .board.is-compact .card__title {
   font-size: 12.5px;
@@ -726,7 +726,7 @@ button { font: inherit; }
 .board.is-compact .card__meta { display: none; }
 .board.is-compact .col__list { gap: 4px; }
 
-/* Скрытые карточки (не прошли фильтр/поиск) */
+/* Hidden cards (failed the filter/search) */
 .card.is-hidden { display: none; }
 
 /* ============ Chips ============ */
@@ -760,7 +760,7 @@ button { font: inherit; }
 .sortable-chosen { cursor: grabbing; }
 .sortable-drag {
   opacity: 0.95;
-  /* без rotate — сдержанно */
+  /* no rotate — restrained */
 }
 
 /* ============ Modal ============ */
@@ -1192,8 +1192,8 @@ input.field--error {
 }
 
 /* ============ Profile: CYBERPUNK ============
- * Тёмный neon, magenta/cyan акцент, clip-path срезы у карточек.
- * Шрифт заголовков — Space Grotesk; фон с грид-сеткой и сканлайнами. */
+ * Dark neon, magenta/cyan accent, clip-path cuts on cards.
+ * Heading font — Space Grotesk; background with grid + scanlines. */
 
 [data-profile="cyberpunk"] {
   --bg-app:        #06070d;
@@ -1303,8 +1303,8 @@ input.field--error {
 [data-profile="cyberpunk"] .chip { border-radius: 3px; }
 
 /* ============ Profile: HORIZON ============
- * Earth tones: copper/bronze/bone. Шрифты Cinzel (заголовки) и Marcellus (текст).
- * Скошенные углы у карточек, шестигранные mark'и проектов. */
+ * Earth tones: copper/bronze/bone. Fonts Cinzel (headings) and Marcellus (text).
+ * Beveled card corners, hexagonal project marks. */
 
 [data-profile="horizon"] {
   --bg-app:        #0d1a23;

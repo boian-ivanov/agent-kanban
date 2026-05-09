@@ -1,59 +1,58 @@
 # Use Cases — agent-kanban
 
-Как канбан реально используется. Каждый UC — короткий сценарий: кто
-действующий, что делает, что получает. Здесь только то, что система
-поддерживает прямо сейчас (без "будущих фич").
+How the kanban gets used in practice. Each UC is a short scenario: who acts,
+what they do, what they get back. Only what the system actually supports
+today — no "future features".
 
-## Жизненный цикл задачи
+## Task lifecycle
 
 ```
-            пользователь                                агент (Claude/Cline/...)
-                ↓                                              ↓
+                user                                       agent (Claude/Cline/...)
+                 ↓                                                ↓
    ┌────────┐  push  ┌──────────┐  pull  ┌──────────┐  ────→  ┌────────────┐
-   │ Backlog│ ─────→ │Согласовано│ ───── │ Аналитика│         │  В работе  │
+   │ Backlog│ ─────→ │ Approved │ ─────  │ Analyst  │         │ In progress│
    └────────┘        └──────────┘        └──────────┘         └────────────┘
                                                                     │
                                                                     ↓
-   ┌────────┐  ←──── ┌──────────┐  ←─── ┌────────────┐
-   │ Закрыто│  принять│ Приёмка  │  done│Тестирование│
-   └────────┘        └──────────┘       └────────────┘
+   ┌────────┐  ←──── ┌──────────┐  ←──── ┌────────────┐
+   │  Done  │ accept │   UAT    │  done  │  Testing   │
+   └────────┘        └──────────┘        └────────────┘
 
-   Заблокировано — параллельная колонка для всего что застряло.
-   Отменено — terminal state «не делаем».
+   Blocked — a parallel column for anything that's stuck.
+   Cancelled — terminal state for "we're not doing this".
 ```
 
-«Владельцы» колонок (см. `kanban_columns()`) — это **семантическая
-подсказка**, не контроль доступа. UI и API позволяют двигать карту куда
-угодно. Колонки можно редактировать в `kanban_store/store.py`
-(`STATUSES` + `status_meta()`).
+Column "owners" (see `kanban_columns()`) are a **semantic hint**, not access
+control. The UI and API let you move a card anywhere. Columns can be edited
+in `kanban_store/store.py` (`STATUSES` + `status_meta()`).
 
 ---
 
 ## UC-0: First-time setup
 
-**Кто:** новый пользователь, только клонировал репо.
+**Who:** new user who just cloned the repo.
 
-**Шаги:**
+**Steps:**
 1. `git clone … && cd agent-kanban`
 2. `python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 3. `.venv/bin/python -m kanban_ui` → http://localhost:7777
-4. Видит **проект `default`** с пустой доской, 9 колонок, sidebar слева, кнопка `+ Задача` в topbar.
+4. They see the **`default` project** with an empty board, 9 columns, sidebar on the left, and a `+ Task` button in the topbar.
 
-**Результат:** работает локально, БД в `tasks.db`, никаких аккаунтов и облака.
+**Outcome:** runs locally, DB in `tasks.db`, no accounts, no cloud.
 
-Опционально: `bash scripts/install_launchd.sh install` — авто-старт при логине.
+Optional: `bash scripts/install_launchd.sh install` — auto-start on login.
 
 ---
 
-## UC-1: Соло разработчик с Claude Code
+## UC-1: Solo developer with Claude Code
 
-**Кто:** один человек, Claude Code открыт в каком-то проекте.
+**Who:** one person, with Claude Code open in some project.
 
-**Trigger:** хочу, чтобы агент видел мои задачи и сам мог двигать карты по мере работы.
+**Trigger:** I want the agent to see my tasks and move cards as work progresses.
 
-**Шаги:**
-1. Создать проект в канбане (`+ Новый проект` → имя + slug + директория = текущий repo).
-2. В корень репо положить `.mcp.json`:
+**Steps:**
+1. Create a project in the kanban (`+ New project` → name + slug + directory = current repo).
+2. Drop a `.mcp.json` at the repo root:
    ```jsonc
    { "mcpServers": { "agent-kanban": {
        "type": "stdio",
@@ -63,172 +62,172 @@
        "env":  { "KANBAN_PROJECT_ID": "myproj" }
    }}}
    ```
-3. Перезапустить Claude Code (`/mcp restart agent-kanban`).
-4. В чате: «*покажи что у меня в работе*» → агент вызывает `kanban_my_active(assignee="claude", project_id="myproj")`.
+3. Restart Claude Code (`/mcp restart agent-kanban`).
+4. In chat: *"show me what I'm working on"* → the agent calls `kanban_my_active(assignee="claude", project_id="myproj")`.
 
-**Результат:** агент знает контекст, может `kanban_pull` задачу из Согласовано, по ходу работы добавлять `kanban_comment`, в конце `kanban_move(task_id, "testing")`.
+**Outcome:** the agent knows the context — it can `kanban_pull` a task from Approved, drop `kanban_comment` notes as it works, and finally `kanban_move(task_id, "testing")`.
 
 ---
 
-## UC-2: Командный канал в Slack/Telegram
+## UC-2: Team channel in Slack/Telegram
 
-**Кто:** команда из 2-5 человек, хочет видеть в чате когда что-то двигается.
+**Who:** a team of 2-5 people who want chat notifications when something moves.
 
-**Шаги:**
-1. Получить incoming-webhook URL Slack или `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT>` для Telegram.
-2. Создать `kanban_data/webhooks.json`:
+**Steps:**
+1. Get a Slack incoming webhook URL, or `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT>` for Telegram.
+2. Create `kanban_data/webhooks.json`:
    ```json
    { "webhooks": [
      { "name": "Slack #dev", "url": "https://hooks.slack.com/...",
        "events": ["task_moved", "task_created"], "format": "slack" }
    ]}
    ```
-3. Никаких рестартов — hot-reload по mtime.
+3. No restarts needed — hot-reload by mtime.
 
-**Результат:** при `task_moved` в чат летит `→ [Project] T-123 «Title»: backlog → in_progress — comment`. Доставка fire-and-forget, основной HTTP не блокируется. Логи доставок в `/api/automation/status.webhooks`.
-
----
-
-## UC-3: Импорт существующего проекта (legacy `PROJECT-PLAN.md`)
-
-**Кто:** пользователь, у которого уже есть markdown-планы в репо.
-
-**Trigger:** хочу подключить эти файлы к доске, не переписывая их вручную.
-
-**Шаги:**
-1. `+ Новый проект` → ID slug + директория → клик «Выбрать…» → нативный Finder.
-2. В табе **«Существующие планы»** канбан скан Files в директории, показывает кандидатов с приоритетами (`PROJECT-PLAN.md`, `BACKLOG.md`, `TODO.md` сверху). Plan-файлы (prio ≤ 5) автоматически отмечены ☑.
-3. Клик «Сохранить».
-
-**Что происходит:**
-- Парсер читает каждый файл, разбирает `## ...` секции:
-  - Канонические заголовки (`## Backlog`, `## Done`, `## Бэклог`) → задачи в соответствующую колонку
-  - Любые другие (`## 🔴 Tier 0`, `## v2 этапы`) → в `backlog` с именем секции в `description` как контекст
-- Создаёт карточки идемпотентно (по uniqueness `project_id + title`)
-- Дописывает блок-инструкцию в `CLAUDE.md` — Claude в этой папке знает, что новые задачи писать в plan-файл
-
-**Результат:** проект Aizav2 с 183 задачами через 1 секунду без копипасты.
+**Outcome:** when `task_moved` fires, the chat gets `→ [Project] T-123 «Title»: backlog → in_progress — comment`. Delivery is fire-and-forget, the main HTTP request isn't blocked. Delivery logs at `/api/automation/status.webhooks`.
 
 ---
 
-## UC-4: Daily standup за 30 секунд
+## UC-3: Importing existing project (legacy `PROJECT-PLAN.md`)
 
-**Кто:** пользователь утром, открыл Claude Code.
+**Who:** a user who already has markdown plans in a repo.
 
-**Шаги:**
-1. *«Что у меня сейчас в работе?»* → `kanban_my_active(assignee="claude")`
-2. *«А что застряло?»* → `kanban_list(status="blocked")`
-3. *«Какие приоритеты в backlog'е?»* → `kanban_list(status="backlog")` + клиент фильтрует priority=high
+**Trigger:** I want to wire those files into the board without rewriting them by hand.
 
-**Результат:** план дня без открытия браузера.
+**Steps:**
+1. `+ New project` → ID slug + directory → click "Choose…" → native Finder.
+2. Under the **"Existing plans"** tab the kanban scans files in the directory and shows candidates by priority (`PROJECT-PLAN.md`, `BACKLOG.md`, `TODO.md` first). Plan files (priority ≤ 5) are pre-checked.
+3. Click "Save".
 
-Альтернатива в UI: `/p/myproj` → фильтр HIGH → density compact → все плотно видно.
+**What happens:**
+- The parser reads each file and walks `## ...` sections:
+  - Canonical headings (`## Backlog`, `## Done`, `## Бэклог`) → tasks land in the matching column
+  - Anything else (`## 🔴 Tier 0`, `## v2 stages`) → goes into `backlog` with the section name copied into `description` for context
+- Cards are created idempotently (uniqueness on `project_id + title`)
+- Appends an instruction block to `CLAUDE.md` so Claude in that folder knows new tasks should be written into the plan file
+
+**Outcome:** an Aizav2 project with 183 tasks in one second, no copy-paste.
 
 ---
 
-## UC-5: Полная сессия агента над одной задачей
+## UC-4: Daily standup in 30 seconds
 
-**Кто:** Claude Code сессия, я говорю «возьми задачу T-008 и сделай её».
+**Who:** you in the morning, with Claude Code open.
+
+**Steps:**
+1. *"What am I working on right now?"* → `kanban_my_active(assignee="claude")`
+2. *"Anything stuck?"* → `kanban_list(status="blocked")`
+3. *"What's the priority in the backlog?"* → `kanban_list(status="backlog")` + the client filters `priority=high`
+
+**Outcome:** plan for the day, no browser needed.
+
+UI alternative: `/p/myproj` → HIGH filter → density compact → everything visible at a glance.
+
+---
+
+## UC-5: Full agent session on a single task
+
+**Who:** Claude Code session, you say "take T-008 and ship it".
 
 **Flow:**
-1. `kanban_get("T-008")` — читает description + acceptance + history.
-2. `kanban_pull("T-008")` — атомарно `approved → analyst, assignee=claude`.
-3. *(анализ кода, план)* → `kanban_comment("T-008", "План: ...")`.
-4. `kanban_move("T-008", "in_progress", comment="начал писать парсер")`.
-5. *(работа)* → `kanban_link("T-008", "pr", "https://github.com/.../pull/42")`.
-6. `kanban_move("T-008", "testing", comment="готов код+тесты")` — webhook летит в Slack.
-7. Я в UI вижу карточку в Тестировании, проверяю → drag-drop в **Приёмка** → **Закрыто**.
+1. `kanban_get("T-008")` — reads description + acceptance + history.
+2. `kanban_pull("T-008")` — atomically `approved → analyst, assignee=claude`.
+3. *(code analysis, plan)* → `kanban_comment("T-008", "Plan: ...")`.
+4. `kanban_move("T-008", "in_progress", comment="started writing the parser")`.
+5. *(work)* → `kanban_link("T-008", "pr", "https://github.com/.../pull/42")`.
+6. `kanban_move("T-008", "testing", comment="code+tests ready")` — webhook fires into Slack.
+7. In the UI you see the card in Testing, you review → drag-drop into **UAT** → **Done**.
 
-**Результат:** задача прошла полный workflow, в history лежат все шаги с актором (`claude`), линки на PR, комментарии.
+**Outcome:** the task ran the full workflow; history holds every step with the actor (`claude`), PR links, and comments.
 
 ---
 
-## UC-6: Авто-архив старых задач
+## UC-6: Auto-archive old tasks
 
-**Кто:** пользователь, доска засоряется done-картами.
+**Who:** user whose board is cluttered with done cards.
 
-**Шаги:** `kanban_data/rules.json`:
+**Steps:** in `kanban_data/rules.json`:
 ```json
 { "rules": [{
-  "name": "Закрытые > 30 дней → отменено",
+  "name": "Done > 30 days → cancelled",
   "trigger": { "type": "task_idle", "status": "done", "days": 30 },
   "action":  { "type": "move_to", "status": "cancelled",
-               "comment": "Авто-архив" }
+               "comment": "Auto-archive" }
 }]}
 ```
 
-**Результат:** каждые 60 секунд (`KANBAN_AUTOMATION_INTERVAL`) engine проверяет правила и двигает старые карты. Все действия с actor=`automation` в history.
+**Outcome:** every 60 seconds (`KANBAN_AUTOMATION_INTERVAL`) the engine checks the rules and moves stale cards. All actions land in history with `actor=automation`.
 
-Поддержанные триггеры: `task_idle` (по `moved_at`), `task_count_in_status` (gt/lt).
-Поддержанные action'ы: `move_to`, `add_comment`, `set_priority`.
+Supported triggers: `task_idle` (by `moved_at`), `task_count_in_status` (gt/lt).
+Supported actions: `move_to`, `add_comment`, `set_priority`.
 
 ---
 
-## UC-7: Inbox capture (ad-hoc заметки)
+## UC-7: Inbox capture (ad-hoc notes)
 
-**Кто:** работаю и в голову пришла идея.
+**Who:** I'm working and an idea pops up.
 
-**Шаги:**
-- Создаёшь `~/Projects/agent-kanban/kanban_data/inbox/quick-note.md`:
+**Steps:**
+- Write `~/Projects/agent-kanban/kanban_data/inbox/quick-note.md`:
   ```markdown
   ---
-  title: Кнопка «Pin» для важных задач
+  title: "Pin" button for important tasks
   priority: low
   size: S
   ---
-  Закрепляет карточку наверху колонки.
+  Pins the card to the top of its column.
   ```
-- Через 5 секунд карточка появилась в backlog. Файл переехал в `inbox/processed/2026-05-09/quick-note.md`.
+- Within 5 seconds the card appears in the backlog. The file is moved to `inbox/processed/2026-05-09/quick-note.md`.
 
-Можно направить watcher на любую папку через `KANBAN_INBOX_DIR`. Например, `~/.claude/projects/<encoded>/memory/inbox/` — Claude свои session-резюме капает туда, канбан их видит.
-
----
-
-## UC-8: Несколько Claude Code-проектов одновременно
-
-**Кто:** в течение дня переключаюсь между 3 проектами в разных директориях.
-
-**Шаги:**
-1. В каждом репо свой `.mcp.json` с `KANBAN_PROJECT_ID="<slug-of-this-project>"`.
-2. Когда я открыт в `~/code/myapp` — Claude видит и двигает только задачи `myapp`.
-3. В UI: `Cmd+Shift+R` → URL `/p/myapp` или клик в sidebar.
-
-**Результат:** контекст не путается, history каждого проекта изолирована.
-
-В UI sidebar помнит последний открытый проект (`localStorage.kb.lastProject`) — куда заходил последний раз, туда и попадаешь.
+You can point the watcher at any folder via `KANBAN_INBOX_DIR`. For example, `~/.claude/projects/<encoded>/memory/inbox/` — Claude drops session summaries there and the kanban picks them up.
 
 ---
 
-## UC-9: Чисто браузерная работа (без агента)
+## UC-8: Multiple Claude Code projects at once
 
-**Кто:** не использую AI вовсе или использую веб-чат отдельно.
+**Who:** I jump between 3 projects in different directories during the day.
 
-**Шаги:**
-- `+ Задача` или `n` — создать.
-- Drag-drop карточек между колонками.
-- Колесико мыши на пустом месте → горизонтальный pan по доске.
-- Hover на колонку → `+` для quick-add (одна строка title, Enter — создать).
-- Клик по карточке → модалка с историей, links, blockers, комментариями.
-- Поиск (`/`), фильтр-чипы (HIGH / Блокер / Агенты / Свободные).
-- Density toggle (`d`) для плотного режима на 100+ задачах.
+**Steps:**
+1. Each repo gets its own `.mcp.json` with `KANBAN_PROJECT_ID="<slug-of-this-project>"`.
+2. When I'm in `~/code/myapp`, Claude only sees and moves `myapp` tasks.
+3. In the UI: `Cmd+Shift+R` → URL `/p/myapp` or click in the sidebar.
 
-**Результат:** канбан ничем не отличается от Trello/Jira, просто локально и без аккаунтов.
+**Outcome:** contexts don't bleed into each other; per-project history stays isolated.
+
+The UI sidebar remembers the last-opened project (`localStorage.kb.lastProject`) — wherever you were last is where you land.
 
 ---
 
-## UC-11: Auto-launch агента при перемещении в Согласовано
+## UC-9: Browser-only workflow (no AI)
 
-**Кто:** соло dev, перетаскивает задачу из Бэклога в Согласовано и хочет, чтобы агент сам её разобрал.
+**Who:** I don't use an AI agent, or I use a separate web chat.
 
-**Trigger:** drag-drop в UI или `POST /api/tasks/{id}/move` → `to_status="approved"`.
+**Steps:**
+- `+ Task` or `n` to create.
+- Drag-drop cards across columns.
+- Mouse wheel on empty space → horizontal pan across the board.
+- Hover a column → `+` for quick-add (single-line title, Enter to create).
+- Click a card → modal with history, links, blockers, comments.
+- Search (`/`), filter chips (HIGH / Blocker / Agents / Free).
+- Density toggle (`d`) for tight mode at 100+ tasks.
 
-**Шаги настройки:**
+**Outcome:** the kanban is no different from Trello/Jira — just local and account-free.
 
-1. **Привязать канбан-проект к директории Claude Code-проекта** (UI → `⋯` → «Директория проекта»). В этой директории должен быть `.mcp.json` с подключением к agent-kanban (см. [INTEGRATION.md](INTEGRATION.md#1-claude-code-mcp)).
+---
 
-2. **Подключить готовый launcher** — `examples/agent-launcher/launch-claude.sh`. Сделать его executable (`chmod +x`).
+## UC-11: Auto-launch agent on Approved
 
-3. **Добавить rule в `kanban_data/rules.json`:**
+**Who:** solo dev who drags a task from Backlog to Approved and wants the agent to take it from there.
+
+**Trigger:** drag-drop in the UI, or `POST /api/tasks/{id}/move` → `to_status="approved"`.
+
+**Setup:**
+
+1. **Bind the kanban project to the Claude Code project directory** (UI → `⋯` → "Project directory"). That directory needs an `.mcp.json` connecting to agent-kanban (see [INTEGRATION.md](INTEGRATION.md#1-claude-code-mcp)).
+
+2. **Wire up the bundled launcher** — `examples/agent-launcher/launch-claude.sh`. Make it executable (`chmod +x`).
+
+3. **Add a rule in `kanban_data/rules.json`:**
    ```json
    {
      "rules": [{
@@ -249,52 +248,52 @@
    }
    ```
 
-   Hot-reload по mtime — рестарт не нужен.
+   Hot-reload by mtime — no restart needed.
 
-**Что происходит при drag-drop в Согласовано:**
+**What happens on drag-drop into Approved:**
 
-1. UI/API → `move_task(T-027, to_status="approved")` → запись в БД.
-2. Endpoint emits `task_moved` event → rule engine matched, запускает в фоне `launch-claude.sh T-027 myproj`.
-3. Скрипт получает task description через REST, формирует prompt, запускает `claude -p "..." --permission-mode=acceptEdits` в директории проекта в фоне (`nohup ... &`).
-4. Claude через MCP делает `kanban_pull(T-027)` (approved → analyst, assignee=claude), пишет план через `kanban_comment`, переходит в `in_progress`, реализует, в конце `kanban_move(T-027, "testing", comment="готов к проверке")`.
-5. Я в UI вижу карточку в Тестировании, проверяю → drag в **Приёмка** → **Закрыто**.
+1. UI/API → `move_task(T-027, to_status="approved")` → DB write.
+2. The endpoint emits a `task_moved` event → the rule engine matches and runs `launch-claude.sh T-027 myproj` in the background.
+3. The script fetches the task description over REST, builds a prompt, and starts `claude -p "..." --permission-mode=acceptEdits` in the project directory in the background (`nohup ... &`).
+4. Through MCP, Claude calls `kanban_pull(T-027)` (approved → analyst, assignee=claude), posts a plan via `kanban_comment`, moves to `in_progress`, implements, and finally `kanban_move(T-027, "testing", comment="ready for review")`.
+5. In the UI you see the card in Testing, you review → drag into **UAT** → **Done**.
 
-**Триггеры (rule.trigger.type=task_moved):**
-- `to_status` (обязательно) — куда переехало.
-- `from_status` (опц.) — откуда. Если задано — фильтрует.
-- `project_id` (опц.) — ограничить одним проектом.
+**Triggers (rule.trigger.type=task_moved):**
+- `to_status` (required) — destination column.
+- `from_status` (optional) — source column. If set, it filters.
+- `project_id` (optional) — limit to one project.
 
 **Action `run_command`:**
-- `cmd` — путь к executable (на сервере).
-- `args` — список с placeholder'ами: `{task_id}`, `{title}`, `{project_id}`, `{from_status}`, `{to_status}`.
-- `log_file` (опц.) — если указан, stdout/stderr скрипта пишется туда.
+- `cmd` — path to an executable (on the server).
+- `args` — list with placeholders: `{task_id}`, `{title}`, `{project_id}`, `{from_status}`, `{to_status}`.
+- `log_file` (optional) — if set, the script's stdout/stderr are written there.
 
-Скрипт запускается в фоне (`asyncio.create_subprocess_exec`), канбан **не ждёт** его завершения — agent сессия может работать минуты-часы.
+The script runs in the background (`asyncio.create_subprocess_exec`); the kanban **does not wait** for it to finish — an agent session can run for minutes or hours.
 
-**Важно про безопасность:** `cmd` и `args` выполняются на сервере без sandboxing'а. Скрипт должен быть твой, не дёргать webhook'и от ненадёжных источников.
+**Security note:** `cmd` and `args` execute on the server with no sandboxing. Keep the script yours, and don't pull webhook payloads from untrusted sources into it.
 
-**Свой агент вместо Claude Code:** скопируй `launch-claude.sh` → `launch-myagent.sh`, замени `claude -p` на свой CLI (`opencode`, `aider`, OpenAI SDK обёртка). Контракт прежний: получи task через REST, запусти агента в фоне.
-
----
-
-## UC-10: Snapshot для отчёта
-
-**Кто:** конец недели, нужно показать что сделано.
-
-**Шаги:**
-- В topbar `Snapshot` или `POST /api/snapshot`.
-- В `snapshots/2026-05-09.json` лежит полный JSON-дамп: все проекты + все задачи + history.
-
-**Результат:** артефакт для коммита/отправки/анализа.
-
-Snapshots игнорятся git'ом (см. `.gitignore`); если нужно версионить — измени правило.
+**Your own agent instead of Claude Code:** copy `launch-claude.sh` → `launch-myagent.sh`, replace `claude -p` with your CLI (`opencode`, `aider`, an OpenAI SDK wrapper). Same contract: fetch the task over REST, start the agent in the background.
 
 ---
 
-## Что **не входит** в текущий scope
+## UC-10: Snapshot for reporting
 
-- Multi-user auth — канбан слушает только `127.0.0.1`. Хочешь команду — поднимай nginx с basic-auth или Authelia сверху, либо ждёшь Roadmap «multi-user mode».
-- Bidirectional `PLAN.md` ↔ kanban — пока односторонний (file → канбан). Изменения в UI **не пишутся обратно** в файл (см. Roadmap).
-- Sub-tasks / иерархия — `task_blockers` есть как зависимости (DAG), но настоящей вложенности нет.
-- Time tracking — есть `moved_at` и `created_at` в history, агрегации поверх — DIY через `/api/snapshot`.
-- GitHub Issues sync — поле `git` в project_source хранит URL+token, но импорт issues пока не реализован.
+**Who:** end of the week, you need to show what got done.
+
+**Steps:**
+- `Snapshot` button in the topbar, or `POST /api/snapshot`.
+- `snapshots/2026-05-09.json` now holds a full JSON dump: every project + every task + history.
+
+**Outcome:** an artifact you can commit, send, or analyze.
+
+Snapshots are gitignored by default (see `.gitignore`); flip the rule if you want them versioned.
+
+---
+
+## What's **not** in the current scope
+
+- Multi-user auth — the kanban listens on `127.0.0.1` only. If you want a team, run nginx with basic-auth or Authelia in front, or wait for the Roadmap "multi-user mode".
+- Bidirectional `PLAN.md` ↔ kanban — for now it's one-way (file → kanban). UI edits are **not written back** to the file (see Roadmap).
+- Sub-tasks / hierarchy — `task_blockers` covers dependencies (DAG), but there's no real nesting.
+- Time tracking — `moved_at` and `created_at` exist in history; aggregate on top yourself via `/api/snapshot`.
+- GitHub Issues sync — `project_source.git` stores a URL+token, but issue import isn't implemented yet.

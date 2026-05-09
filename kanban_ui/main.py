@@ -1,22 +1,22 @@
-"""FastAPI app для канбана. Все мутирующие операции записываются в history
-с actor=KANBAN_ACTOR env var (default 'user').
+"""FastAPI app for the kanban board. Every mutation is recorded in history
+with actor=KANBAN_ACTOR env var (default 'user').
 
 Endpoints (v2):
-    GET    /                          — HTML (root, дефолтный проект)
-    GET    /p/{project_id}            — HTML для конкретного проекта
-    GET    /api/board?project=        — задачи проекта + меты колонок
-    GET    /api/projects              — список проектов с task_counts
-    POST   /api/projects              — создать проект
-    PATCH  /api/projects/{id}         — обновить (name/color/icon/sort_order)
-    POST   /api/projects/{id}/archive — архивация (toggle)
-    GET    /api/tasks/{task_id}       — полная карточка с history
-    POST   /api/tasks                 — новая (project_id в payload)
-    PATCH  /api/tasks/{task_id}       — апдейт полей
-    POST   /api/tasks/{task_id}/move  — drag-drop результат
+    GET    /                          — HTML (root, default project)
+    GET    /p/{project_id}            — HTML for a specific project
+    GET    /api/board?project=        — tasks of a project + column meta
+    GET    /api/projects              — list of projects with task_counts
+    POST   /api/projects              — create a project
+    PATCH  /api/projects/{id}         — update (name/color/icon/sort_order)
+    POST   /api/projects/{id}/archive — archive (toggle)
+    GET    /api/tasks/{task_id}       — full card with history
+    POST   /api/tasks                 — create (project_id in payload)
+    PATCH  /api/tasks/{task_id}       — update fields
+    POST   /api/tasks/{task_id}/move  — drag-drop result
     POST   /api/tasks/{task_id}/comment
     POST   /api/tasks/{task_id}/links
     POST   /api/tasks/{task_id}/blockers
-    POST   /api/snapshot              — сохранить snapshot board
+    POST   /api/snapshot              — persist a board snapshot
 """
 from __future__ import annotations
 
@@ -58,11 +58,11 @@ log = logging.getLogger("kanban.ui")
 
 
 def _actor() -> str:
-    """Имя автора мутаций для записи в task_history.
+    """Name of the mutation author recorded in task_history.
 
-    Берётся из env-переменной ``KANBAN_ACTOR``; по умолчанию ``user``.
-    Используется для одно-пользовательских инсталляций; для multi-user
-    замените на чтение из cookie/header.
+    Pulled from the ``KANBAN_ACTOR`` env variable; defaults to ``user``.
+    Suitable for single-user installations; for multi-user setups replace
+    this with a cookie/header lookup.
     """
     return os.environ.get("KANBAN_ACTOR", "user")
 
@@ -94,7 +94,7 @@ def _webhooks_file() -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Стартует фоновые задачи: inbox watcher + rule engine + webhook dispatcher."""
+    """Starts background tasks: inbox watcher + rule engine + webhook dispatcher."""
     KANBAN_DATA.mkdir(parents=True, exist_ok=True)
     inbox = InboxWatcher(_store, _inbox_dir())
     engine = RuleEngine(_store, _rules_file())
@@ -116,9 +116,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Kanban", version="2.0", lifespan=lifespan)
 
-# Optional CORS — для remote агентов (например Open WebUI на другом хосте).
-# По умолчанию выключено: канбан слушает 127.0.0.1, никто не должен ходить
-# к нему cross-origin. Включается через env: KANBAN_CORS_ORIGINS=https://web.example,https://other
+# Optional CORS — for remote agents (e.g. Open WebUI on a different host).
+# Disabled by default: the kanban listens on 127.0.0.1, no one should reach
+# it cross-origin. Enable via env: KANBAN_CORS_ORIGINS=https://web.example,https://other
 _cors_origins = os.environ.get("KANBAN_CORS_ORIGINS", "").strip()
 if _cors_origins:
     from fastapi.middleware.cors import CORSMiddleware
@@ -205,9 +205,9 @@ class ProjectArchiveRequest(BaseModel):
 class SourcePlanLocalRequest(BaseModel):
     files: list[str] = Field(
         default_factory=list,
-        description="пути к plan-файлам относительно project.path (можно несколько)",
+        description="paths to plan files relative to project.path (multiple allowed)",
     )
-    # Backward compat: одиночный file принимается, попадёт в files[0].
+    # Backward compat: a single file is accepted and lands in files[0].
     file: str | None = None
 
 
@@ -228,7 +228,7 @@ def index() -> str:
 
 @app.get("/p/{project_id}", response_class=HTMLResponse)
 def index_for_project(project_id: str) -> str:
-    """SPA-style: тот же HTML, frontend читает project_id из location.pathname."""
+    """SPA-style: same HTML, the frontend reads project_id from location.pathname."""
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
@@ -277,11 +277,11 @@ def list_projects(include_archived: bool = False) -> dict[str, Any]:
 
 
 def _normalize_path(p: str | None) -> str | None:
-    """Нормализация пути проекта: ``~`` → home, абсолютный путь.
+    """Normalize a project path: ``~`` → home, absolute path.
 
-    Возвращает None, если ``p`` — пустая строка или None.
-    Не валидирует существование — пользователь может указать ещё не созданную
-    директорию или планируемый путь.
+    Returns None if ``p`` is an empty string or None.
+    Does not validate existence — the user may point at a directory that
+    has not been created yet or a planned path.
     """
     if p is None:
         return None
@@ -319,7 +319,7 @@ def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
             color=req.color,
             icon=req.icon,
             sort_order=req.sort_order,
-            # пустая строка очищает path в БД
+            # an empty string clears path in the database
             path=_normalize_path(req.path) if req.path != "" else "",
         )
     except KeyError:
@@ -328,19 +328,19 @@ def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
 
 
 def _project_path_or_400(project_id: str) -> Path:
-    """Достаёт project.path или 400 если не задан."""
+    """Returns project.path or raises 400 if it is not set."""
     p = _store.get_project(project_id)
     if p is None:
         raise HTTPException(404, f"project {project_id} not found")
     if not p.path:
         raise HTTPException(
-            400, "project has no path — задай директорию через PATCH /api/projects/{id}"
+            400, "project has no path — set a directory via PATCH /api/projects/{id}"
         )
     return Path(p.path)
 
 
 def _save_git_secret(project_id: str, token: str) -> None:
-    """Сохраняет token в kanban_data/.env-secrets с правами 600."""
+    """Stores the token in kanban_data/.env-secrets with mode 600."""
     secrets_file = KANBAN_DATA / ".env-secrets"
     KANBAN_DATA.mkdir(parents=True, exist_ok=True)
     var = f"KANBAN_GIT_TOKEN_{project_id.upper().replace('-','_')}"
@@ -359,13 +359,13 @@ def _save_git_secret(project_id: str, token: str) -> None:
 
 
 _PRIO_PATTERNS: list[tuple[re.Pattern[str], int]] = [
-    # Чем ниже число — тем выше приоритет. Файлы планов идут первыми.
+    # Lower number = higher priority. Plan files come first.
     (re.compile(r"^(project[-_]?)?plan\b", re.I), 1),
     (re.compile(r"^backlog\b", re.I), 2),
     (re.compile(r"^tasks?\b", re.I), 3),
     (re.compile(r"^todo\b", re.I), 3),
     (re.compile(r"^roadmap\b", re.I), 4),
-    (re.compile(r"\b(plan|backlog|tasks?|todo|roadmap)\b", re.I), 5),  # содержит в имени
+    (re.compile(r"\b(plan|backlog|tasks?|todo|roadmap)\b", re.I), 5),  # appears anywhere in the name
     (re.compile(r"^claude\b", re.I), 7),
     (re.compile(r"^agents?\b", re.I), 8),
     (re.compile(r"^readme\b", re.I), 9),
@@ -381,10 +381,10 @@ def _file_prio(filename: str, in_root: bool) -> int:
 
 
 def _scan_md_candidates(root: Path) -> list[dict[str, Any]]:
-    """Сканирует директорию и subdir'ы, ищет ``*.md`` подходящие на роль
-    «файла планов». Возвращает отсортированный список с приоритизацией PLAN/
-    BACKLOG/TASKS/TODO/ROADMAP — включая имена вроде ``PROJECT-PLAN.md``
-    или ``my-plan-2026.md`` (regex по основе имени).
+    """Scan a directory and its subdirs for ``*.md`` files that look like
+    a "plan file". Returns a sorted list prioritising PLAN/BACKLOG/TASKS/
+    TODO/ROADMAP — including names like ``PROJECT-PLAN.md`` or
+    ``my-plan-2026.md`` (regex on the basename).
     """
     SEARCH_DIRS = ["", "docs", "notes", "plans", ".claude", "tasks"]
     out: list[dict[str, Any]] = []
@@ -417,7 +417,7 @@ def _scan_md_candidates(root: Path) -> list[dict[str, Any]]:
 
 @app.get("/api/projects/{project_id}/plan-candidates")
 def list_plan_candidates(project_id: str) -> dict[str, Any]:
-    """Plan-кандидаты для существующего проекта (использует project.path)."""
+    """Plan-file candidates for an existing project (uses project.path)."""
     p = _store.get_project(project_id)
     if p is None:
         raise HTTPException(404, f"project {project_id} not found")
@@ -431,7 +431,7 @@ def list_plan_candidates(project_id: str) -> dict[str, Any]:
 
 @app.get("/api/system/list-md-files")
 def list_md_files(path: str) -> dict[str, Any]:
-    """Plan-кандидаты по произвольному пути (для wizard'а до создания проекта)."""
+    """Plan-file candidates for an arbitrary path (used by the wizard before the project is created)."""
     abs_path = os.path.abspath(os.path.expanduser(path.strip()))
     root = Path(abs_path)
     if not root.exists() or not root.is_dir():
@@ -455,7 +455,7 @@ def delete_project_source(project_id: str) -> dict[str, Any]:
 
 @app.post("/api/projects/{project_id}/source/plan-new", status_code=201)
 def setup_source_plan_new(project_id: str) -> dict[str, Any]:
-    """Создаёт PLAN.md в project.path, обновляет CLAUDE.md, регистрирует source."""
+    """Creates PLAN.md in project.path, updates CLAUDE.md, registers the source."""
     p = _store.get_project(project_id)
     if p is None:
         raise HTTPException(404, f"project {project_id} not found")
@@ -483,8 +483,8 @@ def setup_source_plan_new(project_id: str) -> dict[str, Any]:
 def setup_source_plan_local(
     project_id: str, req: SourcePlanLocalRequest
 ) -> dict[str, Any]:
-    """Подключает один или несколько plan-файлов, импортирует задачи из всех,
-    обновляет CLAUDE.md (упоминая первый файл как канонический).
+    """Connect one or more plan files, import tasks from all of them,
+    and update CLAUDE.md (mentioning the first file as the canonical one).
     """
     p = _store.get_project(project_id)
     if p is None:
@@ -495,7 +495,7 @@ def setup_source_plan_local(
         files.append(req.file.strip())
     files = [f.strip().lstrip("/") for f in files if f.strip()]
     if not files:
-        raise HTTPException(400, "укажи хотя бы один файл в `files`")
+        raise HTTPException(400, "specify at least one file in `files`")
 
     resolved: list[Path] = []
     for rel in files:
@@ -516,7 +516,7 @@ def setup_source_plan_local(
         per_file.append({"file": rel, **counts})
         total_created += counts["created"]
         total_skipped += counts["skipped"]
-    # CLAUDE.md показывает первый файл как канонический «куда писать новое».
+    # CLAUDE.md highlights the first file as the canonical "write new tasks here" target.
     plan_md.update_claude_md(
         project_dir / "CLAUDE.md", p.id, p.name, plan_relative=files[0]
     )
@@ -539,7 +539,7 @@ def setup_source_plan_local(
 
 @app.post("/api/projects/{project_id}/source/git", status_code=201)
 def setup_source_git(project_id: str, req: SourceGitRequest) -> dict[str, Any]:
-    """Регистрирует git-источник: URL в config, token в .env-secrets (0600)."""
+    """Registers a git source: URL in config, token in .env-secrets (0600)."""
     if _store.get_project(project_id) is None:
         raise HTTPException(404, f"project {project_id} not found")
     if not req.repo_url.strip():
@@ -553,7 +553,7 @@ def setup_source_git(project_id: str, req: SourceGitRequest) -> dict[str, Any]:
         "ok": True,
         "source": _store.get_project_source(project_id),
         "secret_var": f"KANBAN_GIT_TOKEN_{project_id.upper().replace('-','_')}",
-        "note": "Импорт issues добавим в следующем релизе.",
+        "note": "Issue import will be added in a future release.",
     }
 
 
@@ -659,7 +659,7 @@ async def move_task(task_id: str, req: MoveRequest) -> dict[str, Any]:
         )
     except KeyError:
         raise HTTPException(404, f"task {task_id} not found")
-    if from_status != req.to_status:    # эмитим только реальное перемещение
+    if from_status != req.to_status:    # only emit on an actual move
         payload = {
             "task": t.to_public(),
             "project": _project_payload(t.project_id),
@@ -720,7 +720,7 @@ def snapshot() -> dict[str, Any]:
 
 @app.get("/api/automation/status")
 def get_automation_status() -> dict[str, Any]:
-    """Состояние inbox watcher, rule engine и webhook dispatcher."""
+    """State of the inbox watcher, rule engine, and webhook dispatcher."""
     return {
         "inbox": inbox_status(),
         "rules": rules_status(),
@@ -729,16 +729,16 @@ def get_automation_status() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Native folder picker (через системный диалог).
-# Доступен только в локальной инсталляции — мы запускаем нативный диалог
-# процессом сервера (osascript / zenity / PowerShell), а не через браузер.
+# Native folder picker (via the system dialog).
+# Local-installation only — we open the native dialog from the server
+# process (osascript / zenity / PowerShell), not through the browser.
 # ---------------------------------------------------------------------------
 
 _OSASCRIPT_PICK = """\
 tell application "Finder" to activate
 delay 0.1
 try
-  set f to choose folder with prompt "Выберите директорию проекта"
+  set f to choose folder with prompt "Choose the project directory"
   POSIX path of f
 on error
   return ""
@@ -752,16 +752,16 @@ end try
 
 
 def _resolve_claude_bin() -> str | None:
-    """Та же логика, что в examples/agent-launcher/launch-claude.sh.
+    """Same logic as in examples/agent-launcher/launch-claude.sh.
 
     1) env ``CLAUDE_BIN``
-    2) ``shutil.which`` по PATH (с расширением default PATH)
+    2) ``shutil.which`` on PATH (with an extended default PATH)
     3) macOS fallback: ~/Library/Application Support/Claude/claude-code/*/claude.app/Contents/MacOS/claude
     """
     env_bin = os.environ.get("CLAUDE_BIN")
     if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
         return env_bin
-    # расширим PATH: launchd-процесс может иметь узкий PATH
+    # widen PATH: a launchd process may have a narrow PATH
     extra = ":".join([
         os.path.expanduser("~/.local/bin"),
         os.path.expanduser("~/.npm-global/bin"),
@@ -794,10 +794,10 @@ def _resolve_claude_bin() -> str | None:
 
 @app.get("/api/system/claude-auth-status")
 async def claude_auth_status() -> dict[str, Any]:
-    """Текущий статус авторизации Claude Code CLI.
+    """Current authorisation status of the Claude Code CLI.
 
-    Возвращает ``{"available": false}`` если бинарник не найден,
-    иначе ``{"available": true, "loggedIn": bool, "authMethod": str}``.
+    Returns ``{"available": false}`` if the binary is missing,
+    otherwise ``{"available": true, "loggedIn": bool, "authMethod": str}``.
     """
     bin_ = _resolve_claude_bin()
     if not bin_:
@@ -827,11 +827,12 @@ async def claude_auth_status() -> dict[str, Any]:
 
 @app.post("/api/system/claude-auth-login")
 async def claude_auth_login() -> dict[str, Any]:
-    """Запускает ``claude auth login --claudeai`` в фоне.
+    """Runs ``claude auth login --claudeai`` in the background.
 
-    Команда сама откроет OAuth-flow в браузере. Endpoint не ждёт завершения —
-    возвращает сразу же. Пользователь после успешного логина увидит обновлённый
-    status через poll на /api/system/claude-auth-status.
+    The command opens the OAuth flow in a browser on its own. This endpoint
+    does not wait for completion — it returns immediately. After a successful
+    login the user sees the refreshed state by polling
+    /api/system/claude-auth-status.
     """
     bin_ = _resolve_claude_bin()
     if not bin_:
@@ -848,7 +849,7 @@ async def claude_auth_login() -> dict[str, Any]:
         "ok": True,
         "pid": proc.pid,
         "log": str(log_path),
-        "note": "Открой браузер если он не открылся автоматически и заверши OAuth.",
+        "note": "Open the browser if it does not launch automatically and finish OAuth.",
     }
 
 
@@ -857,10 +858,10 @@ import json  # noqa: E402  (used by claude_auth_status)
 
 @app.post("/api/system/pick-folder")
 async def pick_folder() -> dict[str, Any]:
-    """Открывает нативный диалог выбора папки (macOS / Linux+zenity / Windows).
+    """Opens a native folder picker dialog (macOS / Linux+zenity / Windows).
 
-    Возвращает ``{"path": "/abs/path"}`` или ``{"path": null, "cancelled": true}``,
-    если пользователь нажал Отмена. Если на платформе нет picker'а — 501.
+    Returns ``{"path": "/abs/path"}`` or ``{"path": null, "cancelled": true}``
+    when the user clicks Cancel. When no picker is available on the platform — 501.
     """
     if sys.platform == "darwin":
         cmd = ["osascript", "-e", _OSASCRIPT_PICK]
@@ -868,21 +869,21 @@ async def pick_folder() -> dict[str, Any]:
         if not shutil.which("zenity"):
             raise HTTPException(
                 501,
-                "Нативный picker требует 'zenity' на Linux. "
-                "Введите путь руками либо установите zenity.",
+                "Native picker requires 'zenity' on Linux. "
+                "Enter the path manually or install zenity.",
             )
         cmd = ["zenity", "--file-selection", "--directory",
-               "--title=Выберите директорию проекта"]
+               "--title=Choose the project directory"]
     elif sys.platform == "win32":
         ps_script = (
             "Add-Type -AssemblyName System.Windows.Forms; "
             "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-            "$d.Description='Выберите директорию проекта'; "
+            "$d.Description='Choose the project directory'; "
             "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { '' }"
         )
         cmd = ["powershell", "-NoProfile", "-Command", ps_script]
     else:
-        raise HTTPException(501, f"folder picker не поддержан на {sys.platform}")
+        raise HTTPException(501, f"folder picker is not supported on {sys.platform}")
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -890,14 +891,14 @@ async def pick_folder() -> dict[str, Any]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        # 5 минут — типично для пользователя выбрать папку.
+        # 5 minutes — typical time for the user to pick a folder.
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=300)
     except asyncio.TimeoutError:
         return {"path": None, "cancelled": True, "reason": "timeout"}
     path = stdout_b.decode("utf-8", errors="replace").strip()
     if not path:
         return {"path": None, "cancelled": True}
-    # POSIX path of macOS возвращает с trailing /. Подчистим.
+    # macOS POSIX path returns a trailing slash. Trim it.
     path = path.rstrip("/").rstrip("\\")
     return {"path": path, "cancelled": False}
 
@@ -907,9 +908,9 @@ on run argv
   try
     if (count of argv) > 0 then
       set defaultLoc to POSIX file (item 1 of argv)
-      set f to choose file with prompt "Выберите файл планов" of type {"md","markdown","txt"} default location defaultLoc
+      set f to choose file with prompt "Choose the plan file" of type {"md","markdown","txt"} default location defaultLoc
     else
-      set f to choose file with prompt "Выберите файл планов" of type {"md","markdown","txt"}
+      set f to choose file with prompt "Choose the plan file" of type {"md","markdown","txt"}
     end if
     POSIX path of f
   on error
@@ -921,10 +922,10 @@ end run
 
 @app.post("/api/system/pick-file")
 async def pick_file(default_location: str = "") -> dict[str, Any]:
-    """Открывает нативный диалог выбора файла. macOS only пока."""
+    """Opens a native file picker dialog. macOS only for now."""
     if sys.platform != "darwin":
         raise HTTPException(
-            501, "file picker сейчас работает только на macOS — введите путь руками"
+            501, "file picker currently works only on macOS — enter the path manually"
         )
     args = ["osascript", "-e", _OSASCRIPT_PICK_FILE]
     if default_location:

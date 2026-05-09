@@ -1,6 +1,7 @@
-"""Запуск: ``python -m seed`` — наливает стартовый набор в `tasks.db`.
+"""Run via ``python -m seed`` to fill `tasks.db` with the starter set.
 
-Идемпотентен: если в БД уже есть карточки с такими же title — пропустит.
+Idempotent: cards that already exist in the database (matched by title)
+are skipped.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ def run() -> None:
         created += 1
         print(f"  + {t.id}  [{t.status:11s}] {t.title}")
     print(f"\nDone. Created: {created}, skipped (already present): {skipped}")
-    # Snapshot после seed — пусть будет в гите как baseline
+    # Take a snapshot after seeding so git can carry it as a baseline
     fp = store.save_snapshot()
     print(f"Snapshot: {fp}")
 

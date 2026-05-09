@@ -27,10 +27,14 @@ theme, markdown plan-file import, automation rules.
 
 ## Quickstart
 
+**5 minutes from clone to an AI agent doing your work for you:** see [QUICKSTART.md](QUICKSTART.md).
+
+Bare minimum:
+
 ```bash
 git clone https://github.com/<your-user>/agent-kanban.git
 cd agent-kanban
-python3 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m kanban_ui                  # http://localhost:7777
 ```
@@ -59,7 +63,7 @@ Pick the integration matching your agent:
 
 Static OpenAPI schema: [`docs/openapi.yaml`](docs/openapi.yaml). Interactive Swagger: `http://localhost:7777/docs`.
 
-Real-world flows: [`docs/USECASES.md`](docs/USECASES.md) — 10 use cases (solo dev, team Slack, legacy import, multi-project, agent session, etc.).
+Real-world flows: [`docs/USECASES.md`](docs/USECASES.md) — 11 use cases (solo dev, team Slack, legacy import, multi-project, agent session, auto-launch, etc.).
 
 ## Why
 
@@ -93,7 +97,7 @@ agent-kanban/
 ├── kanban_store/    SQLite store + schema (4 tables, 4 migrations)
 ├── kanban_ui/       FastAPI web UI + automation/{inbox,rules,plan_md}
 │   └── static/      index.html · styles.css · app.js · vendor/Sortable
-├── kanban_mcp/      MCP server (10 tools)
+├── kanban_mcp/      MCP server (14 tools)
 ├── seed/            generic example tasks
 ├── examples/        llm-tool-calling demo scripts
 ├── docs/            INTEGRATION.md, openapi.yaml, screenshots

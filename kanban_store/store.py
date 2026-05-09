@@ -1,7 +1,7 @@
 """Kanban — SQLite store.
 
-Single source of truth: ``tasks.db`` (gitignored), либо путь из env
-``KANBAN_DB`` (см. Store.__init__).
+Single source of truth: ``tasks.db`` (gitignored), or the path from env
+``KANBAN_DB`` (see Store.__init__).
 
 Public API:
     Store.list_tasks(status=..., assignee=...)
@@ -12,7 +12,7 @@ Public API:
     Store.add_comment(task_id, text, actor)
     Store.add_link(task_id, type, value)
     Store.set_blockers(task_id, blocker_ids)
-    Store.snapshot()  -> dict (для JSON-снэпшотов)
+    Store.snapshot()  -> dict (for JSON snapshots)
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from typing import Any, Iterable
 # Status model
 # ============================================================================
 
-# 9 колонок в порядке слева направо для UI.
+# 9 columns in left-to-right UI order.
 STATUSES: list[str] = [
     "backlog",
     "approved",
@@ -46,17 +46,17 @@ STATUSES: list[str] = [
 
 
 def status_meta() -> list[dict[str, str]]:
-    """Метаданные колонок для UI (label + cssClass)."""
+    """Column metadata for the UI (label + cssClass)."""
     return [
-        {"id": "backlog",     "title": "Бэклог",        "owner": "user"},
-        {"id": "approved",    "title": "Согласовано",   "owner": "agent"},
-        {"id": "analyst",     "title": "Аналитика",     "owner": "agent"},
-        {"id": "in_progress", "title": "В работе",      "owner": "agent"},
-        {"id": "testing",     "title": "Тестирование",  "owner": "agent"},
-        {"id": "uat",         "title": "Приёмка",       "owner": "user"},
-        {"id": "done",        "title": "Закрыто",       "owner": "user"},
-        {"id": "blocked",     "title": "Заблокировано", "owner": "any"},
-        {"id": "cancelled",   "title": "Отменено",      "owner": "user"},
+        {"id": "backlog",     "title": "Backlog",      "owner": "user"},
+        {"id": "approved",    "title": "Approved",     "owner": "agent"},
+        {"id": "analyst",     "title": "Analyst",      "owner": "agent"},
+        {"id": "in_progress", "title": "In progress",  "owner": "agent"},
+        {"id": "testing",     "title": "Testing",      "owner": "agent"},
+        {"id": "uat",         "title": "UAT",          "owner": "user"},
+        {"id": "done",        "title": "Done",         "owner": "user"},
+        {"id": "blocked",     "title": "Blocked",      "owner": "any"},
+        {"id": "cancelled",   "title": "Cancelled",    "owner": "user"},
     ]
 
 
@@ -129,7 +129,7 @@ def _now() -> str:
 
 
 class Store:
-    """Thread-safe wrapper над SQLite. Один экземпляр на процесс."""
+    """Thread-safe wrapper around SQLite. One instance per process."""
 
     _lock = threading.RLock()
 
@@ -141,7 +141,7 @@ class Store:
         self._conn = sqlite3.connect(
             str(self.db_path),
             check_same_thread=False,
-            isolation_level=None,  # autocommit; явные транзакции через BEGIN
+            isolation_level=None,  # autocommit; explicit transactions use BEGIN
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
@@ -161,8 +161,8 @@ class Store:
             self._migrate_v4()
 
     def _migrate_v4(self) -> None:
-        """v3 → v4: таблица project_sources (создаётся через schema.sql,
-        здесь только bump version)."""
+        """v3 → v4: project_sources table (created via schema.sql,
+        this method only bumps the version)."""
         row = self._conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
         ).fetchone()
@@ -170,7 +170,7 @@ class Store:
             self._conn.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
 
     def _migrate_v3(self) -> None:
-        """v2 → v3: projects.path TEXT (директория Claude Code-проекта)."""
+        """v2 → v3: projects.path TEXT (Claude Code project directory)."""
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()}
         if "path" not in cols:
             self._conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
@@ -181,10 +181,10 @@ class Store:
             self._conn.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
 
     def _migrate_v2(self) -> None:
-        """v1 → v2: добавляет колонку tasks.project_id для существующих БД,
-        создаёт дефолтный проект (id/name конфигурируются через env).
+        """v1 → v2: adds tasks.project_id for existing databases and
+        creates a default project (id/name are configurable via env).
 
-        Идемпотентно: проверяет PRAGMA table_info перед ALTER.
+        Idempotent: checks PRAGMA table_info before running ALTER.
         """
         row = self._conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
@@ -192,21 +192,21 @@ class Store:
         version = int(row["value"]) if row else 1
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(tasks)").fetchall()}
         if "project_id" not in cols:
-            # старая БД до v2 — добавляем колонку с дефолтом
+            # old pre-v2 database — add the column with a default
             default_id = os.environ.get("KANBAN_DEFAULT_PROJECT_ID", "default")
             self._conn.execute(
                 f"ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT '{default_id}'"
             )
-        # индекс по project_id создаётся всегда (идемпотентно), здесь
-        # потому что в schema.sql свежей БД колонка только что появилась
-        # из CREATE TABLE, а для старых — после ALTER выше.
+        # The project_id index is always created (idempotent). For a fresh
+        # database the column appeared from CREATE TABLE in schema.sql; for
+        # older databases it is created after the ALTER above.
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_project_status "
             "ON tasks(project_id, status, column_order)"
         )
-        # Дефолтный проект — создаётся ТОЛЬКО если в БД нет ни одного проекта
-        # (свежая инсталляция). Существующие БД свои проекты не получают
-        # лишнего "default" сверху.
+        # The default project is created ONLY when the database has no
+        # projects at all (fresh install). Existing databases keep their
+        # own projects without an extra "default" being added on top.
         row = self._conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()
         if row["n"] == 0:
             default_id = os.environ.get("KANBAN_DEFAULT_PROJECT_ID", "default")
@@ -250,10 +250,10 @@ class Store:
         assignee: str | None = None,
         project_id: str | None = None,
     ) -> list[Task]:
-        """Список задач с фильтром, отсортированный по (status, column_order).
+        """List of tasks with filters, sorted by (status, column_order).
 
-        ``project_id=None`` означает «все проекты». Для досочного UI всегда
-        передаётся конкретный project_id.
+        ``project_id=None`` means "all projects". The board UI always
+        passes a concrete project_id.
         """
         sql = "SELECT * FROM tasks WHERE 1=1"
         params: list[Any] = []
@@ -286,7 +286,7 @@ class Store:
         return self._row_to_task(row, eager_links=True, eager_history=True)
 
     def board(self) -> dict[str, list[Task]]:
-        """Группировка по статусам, в порядке колонок."""
+        """Group tasks by status, in column order."""
         result: dict[str, list[Task]] = {s: [] for s in STATUSES}
         for t in self.list_tasks():
             result.setdefault(t.status, []).append(t)
@@ -319,7 +319,7 @@ class Store:
             self._conn.execute("BEGIN")
             try:
                 tid = task_id or self._next_id()
-                # column_order — последний в колонке + 1 (с учётом проекта)
+                # column_order — last in the column + 1 (per project)
                 row = self._conn.execute(
                     "SELECT COALESCE(MAX(column_order), -1) AS m FROM tasks "
                     "WHERE status=? AND project_id=?",
@@ -392,7 +392,7 @@ class Store:
                     raise KeyError(task_id)
                 from_status = row["status"]
                 project_id = row["project_id"]
-                # column_order — append в конец проектной колонки, если не задан
+                # column_order — append to the end of the project's column when not specified
                 if column_order is None:
                     r2 = self._conn.execute(
                         "SELECT COALESCE(MAX(column_order), -1) AS m FROM tasks "
@@ -449,7 +449,7 @@ class Store:
     def pull_task(self, task_id: str, assignee: str = "claude") -> Task:
         """Atomic: assignee IS NULL → assignee, status approved → analyst.
 
-        Используется Claude/agent'ом для безопасного «беру задачу».
+        Used by Claude/an agent for a safe "claim the task" operation.
         """
         ts = _now()
         with self._lock:
@@ -468,7 +468,7 @@ class Store:
                     raise RuntimeError(
                         f"task {task_id} is in '{row['status']}', not 'approved'"
                     )
-                # переводим в analyst и берём (учитывая проект)
+                # move to analyst and claim (per project)
                 r2 = self._conn.execute(
                     "SELECT COALESCE(MAX(column_order), -1) AS m FROM tasks "
                     "WHERE status='analyst' AND project_id=?",
@@ -591,7 +591,7 @@ class Store:
         return t
 
     def reorder(self, task_id: str, new_order: int) -> None:
-        """Изменить порядок внутри текущей колонки."""
+        """Change the order within the current column."""
         with self._lock:
             self._conn.execute(
                 "UPDATE tasks SET column_order=? WHERE id=?", (new_order, task_id)
@@ -602,7 +602,7 @@ class Store:
     # ------------------------------------------------------------------
 
     def list_projects(self, *, include_archived: bool = False) -> list[Project]:
-        """Все проекты с агрегированными task_counts по статусам."""
+        """All projects with task_counts aggregated by status."""
         sql = "SELECT * FROM projects"
         if not include_archived:
             sql += " WHERE archived = 0"
@@ -680,14 +680,14 @@ class Store:
     ) -> Project:
         sets: list[str] = []
         params: list[Any] = []
-        # path передаём как есть (None означает «не трогаем», "" означает «очистить»).
+        # path is forwarded as-is (None means "leave alone", "" means "clear").
         for col, val in (
             ("name", name), ("color", color), ("icon", icon),
             ("sort_order", sort_order), ("path", path),
         ):
             if val is not None:
                 sets.append(f"{col} = ?")
-                # пустая строка для path = NULL в БД
+                # an empty string for path becomes NULL in the database
                 params.append(None if (col == "path" and val == "") else val)
         if not sets:
             p = self.get_project(project_id)
@@ -709,7 +709,7 @@ class Store:
         return p
 
     # ------------------------------------------------------------------
-    # Project sources (один источник на проект)
+    # Project sources (one source per project)
     # ------------------------------------------------------------------
 
     def set_project_source(
@@ -785,7 +785,7 @@ class Store:
     # ------------------------------------------------------------------
 
     def snapshot(self) -> dict[str, Any]:
-        """Дамп всей доски в plain-dict для JSON-сохранения."""
+        """Dump the whole board as a plain dict for JSON persistence."""
         tasks = self.list_tasks()
         projects = self.list_projects(include_archived=True)
         return {

@@ -1,7 +1,7 @@
-"""Loose-mode parser tests: проверяем что секции с произвольными
-заголовками (`## 🔴 Tier 0`, `## Status snapshot`, `## v2 этапы`) попадают
-в backlog с section_label, а canonical-заголовки (`## Backlog`, `## Done`)
-ведут себя как раньше — label=None.
+"""Loose-mode parser tests: verify that sections with non-canonical
+headings (`## 🔴 Tier 0`, `## Status snapshot`, `## v2 stages`) land in
+backlog with a section_label, while canonical headings (`## Backlog`,
+`## Done`) keep the previous behaviour — label=None.
 """
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def test_empty_text():
 @pytest.fixture
 def temp_store(tmp_path):
     db_path = tmp_path / "test.db"
-    # дефолтный проект из env-vars (см. _migrate_v2)
+    # default project comes from env vars (see _migrate_v2)
     os.environ["KANBAN_DEFAULT_PROJECT_ID"] = "test"
     os.environ["KANBAN_DEFAULT_PROJECT_NAME"] = "Test"
     store = Store(db_path)
@@ -123,7 +123,7 @@ def test_import_loose_writes_section_label_to_description(temp_store, tmp_path):
 
     done = by_title["Already done"]
     assert done.status == "done"
-    assert done.description == ""  # canonical → пустое описание
+    assert done.description == ""  # canonical → empty description
 
 
 def test_import_idempotent(temp_store, tmp_path):

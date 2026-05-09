@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Установка/деинсталляция UI как launchd-сервиса (auto-start при логине, macOS).
+# Install/uninstall the UI as a launchd service (auto-start on login, macOS).
 #
-#   bash scripts/install_launchd.sh install      # подставляет путь, копирует, грузит
-#   bash scripts/install_launchd.sh uninstall    # выгружает и удаляет
+#   bash scripts/install_launchd.sh install      # substitute paths, copy, load
+#   bash scripts/install_launchd.sh uninstall    # unload and remove
 #   bash scripts/install_launchd.sh status
-#   bash scripts/install_launchd.sh reload       # после правок plist-template
+#   bash scripts/install_launchd.sh reload       # after editing the plist template
 #
-# Логи: ~/Library/Logs/agent-kanban/{stdout,stderr}.log
+# Logs: ~/Library/Logs/agent-kanban/{stdout,stderr}.log
 # UI:   http://localhost:7777/
 
 set -euo pipefail
@@ -19,7 +19,7 @@ LOG_DIR="${HOME}/Library/Logs/agent-kanban"
 
 mkdir -p "${LOG_DIR}" "${HOME}/Library/LaunchAgents"
 
-# Подставляет __INSTALL_PATH__ и __HOME__ в plist-template и пишет в DST.
+# Substitutes __INSTALL_PATH__ and __HOME__ into the plist template and writes DST.
 materialize_plist() {
     if [[ ! -f "${PLIST_SRC}" ]]; then
         echo "ERROR: plist template not found: ${PLIST_SRC}"
@@ -27,7 +27,7 @@ materialize_plist() {
     fi
     if [[ ! -x "${REPO_DIR}/.venv/bin/python" ]]; then
         echo "ERROR: ${REPO_DIR}/.venv/bin/python not found."
-        echo "  Создай virtualenv первым:"
+        echo "  Create a virtualenv first:"
         echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
         exit 1
     fi

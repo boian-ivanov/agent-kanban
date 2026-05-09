@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Cinzel:wght@500;600;700&family=Marcellus&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=2026-05-08-h16" />
+  <link rel="stylesheet" href="/static/styles.css?v=2026-05-09-en1" />
   <script>
-    // Применяем сохранённые тему и профиль до парсинга body — без flash of wrong styles.
+    // Apply saved theme and profile before body parses — no flash of wrong styles.
     (function () {
       var t = localStorage.getItem("kb.theme");
       if (!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
@@ -27,7 +27,7 @@
       <div class="sidebar__head">
         <span class="brand__mark"></span>
         <span class="sidebar__brand">Kanban</span>
-        <button class="btn btn--icon sidebar__toggle" id="btn-sidebar" title="Свернуть (\\)" aria-label="Свернуть">‹</button>
+        <button class="btn btn--icon sidebar__toggle" id="btn-sidebar" title="Collapse (\\)" aria-label="Collapse">‹</button>
       </div>
       <nav class="proj-list" id="proj-list">
         <!-- projects rendered by app.js -->
@@ -35,12 +35,12 @@
       <div class="proj-archive" id="proj-archive" hidden>
         <button class="proj-archive__head" id="btn-archive-toggle">
           <span class="proj-archive__chevron">▸</span>
-          <span>Архив</span>
+          <span>Archive</span>
           <span class="proj-archive__count" id="archive-count">0</span>
         </button>
         <div class="proj-archive__list" id="proj-archive-list" hidden></div>
       </div>
-      <button class="proj-add" id="btn-new-proj">+ Новый проект</button>
+      <button class="proj-add" id="btn-new-proj">+ New project</button>
     </aside>
 
     <!-- ========== Workspace ========== -->
@@ -52,25 +52,25 @@
           <span class="topbar__count" id="stats">—</span>
         </div>
         <div class="topbar__search">
-          <input type="text" id="search" placeholder="Поиск (/) — title, id, описание" autocomplete="off" />
-          <button class="search__clear" id="btn-search-clear" hidden aria-label="Очистить">×</button>
+          <input type="text" id="search" placeholder="Search (/) — title, id, description" autocomplete="off" />
+          <button class="search__clear" id="btn-search-clear" hidden aria-label="Clear">×</button>
         </div>
         <div class="topbar__filters" id="filters">
-          <button class="filter-chip" data-filter="prio:high" title="Только HIGH">HIGH</button>
-          <button class="filter-chip" data-filter="blocked" title="Только с блокером">Блокер</button>
-          <button class="filter-chip" data-filter="assignee:agent" title="Только агенты">Агенты</button>
-          <button class="filter-chip" data-filter="unassigned" title="Без assignee">Свободные</button>
+          <button class="filter-chip" data-filter="prio:high" title="HIGH only">HIGH</button>
+          <button class="filter-chip" data-filter="blocked" title="With blocker only">Blocker</button>
+          <button class="filter-chip" data-filter="assignee:agent" title="Agents only">Agents</button>
+          <button class="filter-chip" data-filter="unassigned" title="No assignee">Unassigned</button>
         </div>
         <div class="topbar__actions">
-          <button class="btn btn--icon claude-auth claude-auth--unknown" id="btn-claude-auth" title="Статус Claude CLI" aria-label="Claude auth">
+          <button class="btn btn--icon claude-auth claude-auth--unknown" id="btn-claude-auth" title="Claude CLI status" aria-label="Claude auth">
             <span class="claude-auth__mark">C</span>
           </button>
-          <button class="btn btn--icon" id="btn-profile" title="Сменить профиль оформления (p)" aria-label="Профиль">◇</button>
-          <button class="btn btn--icon" id="btn-theme" title="Сменить тему (t)" aria-label="Тема">◐</button>
-          <button class="btn btn--icon" id="btn-density" title="Плотность карточек (d)" aria-label="Плотность">≡</button>
+          <button class="btn btn--icon" id="btn-profile" title="Switch theme profile (p)" aria-label="Profile">◇</button>
+          <button class="btn btn--icon" id="btn-theme" title="Toggle theme (t)" aria-label="Theme">◐</button>
+          <button class="btn btn--icon" id="btn-density" title="Card density (d)" aria-label="Density">≡</button>
           <button class="btn btn--ghost" id="btn-snapshot" title="Snapshot board → snapshots/">Snapshot</button>
-          <button class="btn btn--ghost" id="btn-refresh" title="Обновить (r)" aria-label="Обновить">↻</button>
-          <button class="btn btn--primary" id="btn-new" title="Новая задача (n)">+ Задача</button>
+          <button class="btn btn--ghost" id="btn-refresh" title="Refresh (r)" aria-label="Refresh">↻</button>
+          <button class="btn btn--primary" id="btn-new" title="New task (n)">+ Task</button>
         </div>
       </header>
 
@@ -88,28 +88,28 @@
       <header class="modal__head">
         <span class="task-id" id="m-id">T-???</span>
         <span class="chip chip--status" id="m-status">…</span>
-        <button class="btn btn--icon" data-close aria-label="Закрыть">×</button>
+        <button class="btn btn--icon" data-close aria-label="Close">×</button>
       </header>
       <div class="modal__body">
         <div class="field">
-          <label>Заголовок</label>
+          <label>Title</label>
           <input type="text" id="m-title" />
         </div>
         <div class="field-row">
           <div class="field">
-            <label>Приоритет</label>
+            <label>Priority</label>
             <select id="m-priority">
-              <option value="high">Высокий</option>
-              <option value="normal">Обычный</option>
-              <option value="low">Низкий</option>
+              <option value="high">High</option>
+              <option value="normal">Normal</option>
+              <option value="low">Low</option>
             </select>
           </div>
           <div class="field">
-            <label>Размер</label>
+            <label>Size</label>
             <select id="m-size">
-              <option value="S">S — &lt;30 мин</option>
-              <option value="M">M — &lt;2 ч</option>
-              <option value="L">L — &gt;2 ч</option>
+              <option value="S">S — &lt;30 min</option>
+              <option value="M">M — &lt;2 h</option>
+              <option value="L">L — &gt;2 h</option>
             </select>
           </div>
           <div class="field">
@@ -118,7 +118,7 @@
           </div>
         </div>
         <div class="field">
-          <label>Описание</label>
+          <label>Description</label>
           <textarea id="m-description" rows="6"></textarea>
         </div>
         <div class="field">
@@ -126,11 +126,11 @@
           <textarea id="m-acceptance" rows="4"></textarea>
         </div>
         <div class="field">
-          <label>Внешний блокер</label>
-          <input type="text" id="m-blocker" placeholder="Например: DevOps: monitoring.viewer" />
+          <label>External blocker</label>
+          <input type="text" id="m-blocker" placeholder="e.g. DevOps: monitoring.viewer" />
         </div>
         <div class="field">
-          <label>Ссылки</label>
+          <label>Links</label>
           <div class="links" id="m-links"></div>
           <div class="link-add">
             <select id="m-link-type">
@@ -139,25 +139,25 @@
               <option value="pr">pr</option>
               <option value="url">url</option>
             </select>
-            <input type="text" id="m-link-value" placeholder="имя файла или url" />
+            <input type="text" id="m-link-value" placeholder="filename or url" />
             <button class="btn btn--ghost" id="btn-add-link">+</button>
           </div>
         </div>
         <div class="field">
-          <label>История</label>
+          <label>History</label>
           <div class="history" id="m-history"></div>
         </div>
         <div class="field">
-          <label>Добавить комментарий</label>
+          <label>Add comment</label>
           <div class="comment-add">
-            <input type="text" id="m-comment" placeholder="Текст комментария" />
+            <input type="text" id="m-comment" placeholder="Comment text" />
             <button class="btn btn--ghost" id="btn-add-comment">+</button>
           </div>
         </div>
       </div>
       <footer class="modal__foot">
-        <button class="btn btn--ghost" data-close>Отмена</button>
-        <button class="btn btn--primary" id="btn-save">Сохранить</button>
+        <button class="btn btn--ghost" data-close>Cancel</button>
+        <button class="btn btn--primary" id="btn-save">Save</button>
       </footer>
     </div>
   </div>
@@ -167,34 +167,34 @@
     <div class="modal__backdrop" data-close-new></div>
     <div class="modal__panel">
       <header class="modal__head">
-        <span class="task-id">Новая задача</span>
+        <span class="task-id">New task</span>
         <span class="chip chip--status" id="n-proj-chip">FinOps</span>
-        <button class="btn btn--icon" data-close-new aria-label="Закрыть">×</button>
+        <button class="btn btn--icon" data-close-new aria-label="Close">×</button>
       </header>
       <div class="modal__body">
         <div class="field">
-          <label>Заголовок</label>
+          <label>Title</label>
           <input type="text" id="n-title" />
         </div>
         <div class="field-row">
           <div class="field">
-            <label>Колонка</label>
+            <label>Column</label>
             <select id="n-status">
-              <option value="backlog">Бэклог</option>
-              <option value="approved">Согласовано</option>
-              <option value="blocked">Заблокировано</option>
+              <option value="backlog">Backlog</option>
+              <option value="approved">Approved</option>
+              <option value="blocked">Blocked</option>
             </select>
           </div>
           <div class="field">
-            <label>Приоритет</label>
+            <label>Priority</label>
             <select id="n-priority">
-              <option value="normal">Обычный</option>
-              <option value="high">Высокий</option>
-              <option value="low">Низкий</option>
+              <option value="normal">Normal</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
             </select>
           </div>
           <div class="field">
-            <label>Размер</label>
+            <label>Size</label>
             <select id="n-size">
               <option value="M">M</option>
               <option value="S">S</option>
@@ -203,7 +203,7 @@
           </div>
         </div>
         <div class="field">
-          <label>Описание</label>
+          <label>Description</label>
           <textarea id="n-description" rows="5"></textarea>
         </div>
         <div class="field">
@@ -212,8 +212,8 @@
         </div>
       </div>
       <footer class="modal__foot">
-        <button class="btn btn--ghost" data-close-new>Отмена</button>
-        <button class="btn btn--primary" id="btn-create">Создать</button>
+        <button class="btn btn--ghost" data-close-new>Cancel</button>
+        <button class="btn btn--primary" id="btn-create">Create</button>
       </footer>
     </div>
   </div>
@@ -223,29 +223,29 @@
     <div class="modal__backdrop" data-close-proj></div>
     <div class="modal__panel modal__panel--narrow">
       <header class="modal__head">
-        <span class="task-id" id="proj-modal-title">Новый проект</span>
-        <button class="btn btn--icon" data-close-proj aria-label="Закрыть">×</button>
+        <span class="task-id" id="proj-modal-title">New project</span>
+        <button class="btn btn--icon" data-close-proj aria-label="Close">×</button>
       </header>
       <div class="modal__body">
         <div class="field">
-          <label>Название</label>
+          <label>Name</label>
           <input type="text" id="p-name" placeholder="DevOps" />
         </div>
         <div class="field">
           <label>ID (slug)</label>
           <input type="text" id="p-id" placeholder="devops" pattern="^[a-z][a-z0-9-]{1,31}$" />
-          <span class="field__hint">Латиница в нижнем регистре, цифры, дефис. От 2 до 32 символов.</span>
+          <span class="field__hint">Lowercase latin, digits, hyphen. 2 to 32 characters.</span>
         </div>
         <div class="field">
-          <label>Директория проекта</label>
+          <label>Project directory</label>
           <div class="path-row">
-            <input type="text" id="p-path" placeholder="не выбрана" autocomplete="off" />
-            <button class="btn btn--ghost" type="button" data-action="pick-folder" id="btn-pick-folder" title="Выбрать в Finder">Выбрать…</button>
+            <input type="text" id="p-path" placeholder="not selected" autocomplete="off" />
+            <button class="btn btn--ghost" type="button" data-action="pick-folder" id="btn-pick-folder" title="Pick in Finder">Choose…</button>
           </div>
-          <span class="field__hint">Опционально. Путь к Claude Code-проекту на диске.</span>
+          <span class="field__hint">Optional. Path to the Claude Code project on disk.</span>
         </div>
         <div class="field">
-          <label>Цвет</label>
+          <label>Color</label>
           <div class="color-palette" id="p-palette">
             <button class="swatch is-active" data-color="#F10D30" style="background:#F10D30" aria-label="red"></button>
             <button class="swatch" data-color="#16315A" style="background:#16315A" aria-label="navy"></button>
@@ -259,37 +259,38 @@
         </div>
         <!-- ==== Source wizard ==== -->
         <div class="field source-wizard" id="source-wizard">
-          <label>Источник задач</label>
+          <label>Task source</label>
           <div class="source-tabs">
-            <button class="source-tab is-active" data-source="new" type="button">Новый проект</button>
-            <button class="source-tab" data-source="local" type="button">Существующие планы</button>
-            <button class="source-tab" data-source="git" type="button">Git репо</button>
+            <button class="source-tab is-active" data-source="new" type="button">New project</button>
+            <button class="source-tab" data-source="local" type="button">Existing plans</button>
+            <button class="source-tab" data-source="git" type="button">Git repo</button>
           </div>
 
           <div class="source-pane" data-pane="new">
             <p class="source-hint">
-              Канбан создаст <code>PLAN.md</code> в директории и добавит в
-              <code>CLAUDE.md</code> блок-инструкцию: новые задачи Claude
-              пишет в <code>PLAN.md</code>, канбан их подхватит.
+              Kanban will create <code>PLAN.md</code> in the directory and add an
+              instruction block to <code>CLAUDE.md</code>: Claude writes new tasks
+              to <code>PLAN.md</code>, and Kanban picks them up.
             </p>
           </div>
 
           <div class="source-pane" data-pane="local" hidden>
             <div class="src-candidates" id="src-candidates">
-              <div class="src-candidates__empty">Сначала укажи директорию проекта (поле выше).</div>
+              <div class="src-candidates__empty">First specify the project directory (field above).</div>
             </div>
             <div class="src-candidates__actions">
-              <span class="src-candidates__counter" id="src-candidates-counter">Выбрано: 0</span>
-              <button class="btn btn--ghost" type="button" data-action="refresh-candidates" id="btn-refresh-candidates" title="Перечитать">↻</button>
-              <button class="btn btn--ghost" type="button" data-action="pick-folder" id="btn-pick-other-folder">Выбрать другую папку…</button>
+              <span class="src-candidates__counter" id="src-candidates-counter">Selected: 0</span>
+              <button class="btn btn--ghost" type="button" data-action="refresh-candidates" id="btn-refresh-candidates" title="Reload">↻</button>
+              <button class="btn btn--ghost" type="button" data-action="pick-folder" id="btn-pick-other-folder">Choose another folder…</button>
             </div>
             <p class="source-hint">
-              Отмечай галочкой файлы, из которых импортировать задачи. Файлы
-              типа PLAN/BACKLOG/TASKS отмечаются автоматически. Парсер читает
-              заголовки <code>## Backlog</code>, <code>## In progress</code>,
-              <code>## Done</code> и т.д. — каждая строка <code>- [ ] ...</code>
-              станет карточкой. После импорта обновим <code>CLAUDE.md</code>,
-              чтобы Claude писал новые задачи в первый из выбранных файлов.
+              Tick the files to import tasks from. Files like PLAN/BACKLOG/TASKS
+              are checked automatically. The parser reads
+              <code>## Backlog</code>, <code>## In progress</code>,
+              <code>## Done</code> headings and the like — every
+              <code>- [ ] ...</code> line becomes a card. After import we update
+              <code>CLAUDE.md</code> so Claude writes new tasks to the first
+              selected file.
             </p>
           </div>
 
@@ -297,21 +298,22 @@
             <input type="text" id="src-git-url" placeholder="https://github.com/user/repo" autocomplete="off" />
             <input type="password" id="src-git-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
             <p class="source-hint">
-              URL сохранится в БД проекта, токен — в <code>kanban_data/.env-secrets</code>
-              с правами 600 как <code>KANBAN_GIT_TOKEN_&lt;ID&gt;</code>.
-              Импорт issues добавим в следующем релизе.
+              The URL is stored in the project DB; the token goes to
+              <code>kanban_data/.env-secrets</code> with mode 600 as
+              <code>KANBAN_GIT_TOKEN_&lt;ID&gt;</code>.
+              Issue import will arrive in the next release.
             </p>
           </div>
 
           <div class="source-current" id="source-current" hidden>
-            <strong>Текущий источник:</strong>
+            <strong>Current source:</strong>
             <span id="source-current-text">—</span>
           </div>
         </div>
       </div>
       <footer class="modal__foot">
-        <button class="btn btn--ghost" data-close-proj>Отмена</button>
-        <button class="btn btn--primary" id="btn-create-proj">Создать</button>
+        <button class="btn btn--ghost" data-close-proj>Cancel</button>
+        <button class="btn btn--primary" id="btn-create-proj">Create</button>
       </footer>
     </div>
   </div>
@@ -319,6 +321,6 @@
   <div class="toast" id="toast" hidden></div>
 
   <script src="/static/vendor/Sortable.min.js"></script>
-  <script src="/static/app.js?v=2026-05-08-h16"></script>
+  <script src="/static/app.js?v=2026-05-09-en1"></script>
 </body>
 </html>

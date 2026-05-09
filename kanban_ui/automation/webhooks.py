@@ -1,6 +1,6 @@
 """HTTP webhook notifications.
 
-Конфиг в ``KANBAN_WEBHOOKS_FILE`` (default: ``kanban_data/webhooks.json``)::
+Config lives in ``KANBAN_WEBHOOKS_FILE`` (default: ``kanban_data/webhooks.json``)::
 
     {
       "webhooks": [
@@ -8,7 +8,7 @@
           "name": "Slack #dev",
           "url": "https://hooks.slack.com/services/...",
           "events": ["task_created", "task_moved", "task_commented"],
-          "project_id": null,                     // null = все проекты
+          "project_id": null,                     // null = all projects
           "format": "slack",                      // generic | slack | telegram
           "enabled": true
         },
@@ -21,19 +21,19 @@
       ]
     }
 
-Поддерживаемые события: ``task_created``, ``task_moved``, ``task_commented``,
-``task_updated``. Эмиттер вызывается из соответствующих endpoint'ов в
-``main.py`` через ``emit_event(...)``.
+Supported events: ``task_created``, ``task_moved``, ``task_commented``,
+``task_updated``. The emitter is invoked from the corresponding endpoints
+in ``main.py`` via ``emit_event(...)``.
 
-Hot-reload по mtime файла. Все доставки идут как fire-and-forget asyncio
-tasks — если webhook упал/долго отвечает, основной HTTP-запрос пользователя
-не блокируется. Логи срабатываний доступны через ``/api/automation/status``.
+Hot-reload by file mtime. Every delivery runs as a fire-and-forget asyncio
+task — if a webhook fails or responds slowly, the user's HTTP request is
+not blocked. Delivery logs are available via ``/api/automation/status``.
 
-Форматы:
-- ``generic``  — POST raw JSON payload (event, task, ...).
-- ``slack``    — POST ``{"text": "..."}`` для Slack Incoming Webhooks.
-- ``telegram`` — POST ``{"text": "..."}`` для Telegram Bot API
-                 (chat_id передаётся в URL).
+Formats:
+- ``generic``  — POST the raw JSON payload (event, task, ...).
+- ``slack``    — POST ``{"text": "..."}`` for Slack Incoming Webhooks.
+- ``telegram`` — POST ``{"text": "..."}`` for the Telegram Bot API
+                 (chat_id is passed in the URL).
 """
 from __future__ import annotations
 
@@ -59,8 +59,8 @@ _status: dict[str, Any] = {
     "last_emit_at": None,
     "delivered_total": 0,
     "failed_total": 0,
-    "last_deliveries": [],   # последние 20: {ts, name, event, status_code, ms}
-    "last_errors": [],       # последние 10: {ts, name, error}
+    "last_deliveries": [],   # last 20: {ts, name, event, status_code, ms}
+    "last_errors": [],       # last 10: {ts, name, error}
     "config_mtime": None,
 }
 
@@ -86,37 +86,37 @@ def _short_title(t: dict[str, Any], n: int = 60) -> str:
 
 
 def _fmt_text(event: str, payload: dict[str, Any]) -> str:
-    """Человекочитаемая строка для slack/telegram."""
+    """Human-readable line for slack/telegram."""
     t = payload.get("task") or {}
     project = (payload.get("project") or {}).get("name") or t.get("project_id", "?")
     title = _short_title(t)
     if event == "task_created":
-        return f"+ [{project}] {t.get('id', '?')} «{title}» → {t.get('status')}"
+        return f"+ [{project}] {t.get('id', '?')} \"{title}\" -> {t.get('status')}"
     if event == "task_moved":
         return (
-            f"→ [{project}] {t.get('id', '?')} «{title}»: "
-            f"{payload.get('from_status')} → {payload.get('to_status')}"
-            + (f" — {payload.get('comment')}" if payload.get("comment") else "")
+            f"-> [{project}] {t.get('id', '?')} \"{title}\": "
+            f"{payload.get('from_status')} -> {payload.get('to_status')}"
+            + (f" - {payload.get('comment')}" if payload.get("comment") else "")
         )
     if event == "task_commented":
         return (
-            f"💬 [{project}] {t.get('id', '?')} «{title}»: "
+            f"[comment] [{project}] {t.get('id', '?')} \"{title}\": "
             f"{payload.get('comment', '')[:120]}"
         )
     if event == "task_updated":
         fields = payload.get("changed_fields") or []
-        return f"✎ [{project}] {t.get('id', '?')} «{title}» обновлены: {', '.join(fields) or '—'}"
-    return f"[{project}] {event}: {t.get('id', '?')} «{title}»"
+        return f"[edit] [{project}] {t.get('id', '?')} \"{title}\" updated: {', '.join(fields) or '-'}"
+    return f"[{project}] {event}: {t.get('id', '?')} \"{title}\""
 
 
 def _build_body(format_: str, event: str, payload: dict[str, Any]) -> dict[str, Any]:
     if format_ == "slack":
         return {"text": _fmt_text(event, payload)}
     if format_ == "telegram":
-        # chat_id должен быть в URL (?chat_id=...). Не используем emoji в тексте
-        # для telegram если хочется чтоб без зависимости от parse_mode.
-        return {"text": _fmt_text(event, payload).replace("💬", ":").replace("→", "->").replace("✎", "*")}
-    # generic — отправляем всё что дали
+        # chat_id must be in the URL (?chat_id=...). The text intentionally
+        # avoids emoji so it stays parse_mode-independent.
+        return {"text": _fmt_text(event, payload)}
+    # generic — forward whatever we received
     return {
         "event": event,
         "ts": _now(),
@@ -134,7 +134,7 @@ class WebhookDispatcher:
         self.config_file = config_file
         self._mtime: float | None = None
         self._hooks: list[dict[str, Any]] = []
-        # один client на весь жизненный цикл — connection pooling
+        # single client for the whole lifecycle — connection pooling
         self._client: httpx.AsyncClient | None = None
 
     async def _ensure_client(self) -> httpx.AsyncClient:
@@ -182,7 +182,7 @@ class WebhookDispatcher:
         log.info("webhooks.json reloaded: %d active hooks", len(valid))
 
     async def emit(self, event: str, payload: dict[str, Any]) -> None:
-        """Не блокирует caller'а: каждый webhook отправляется отдельной task."""
+        """Does not block the caller: each webhook is dispatched as a separate task."""
         if event not in VALID_EVENTS:
             log.warning("unknown event: %s", event)
             return
@@ -254,7 +254,7 @@ def _push_error(name: str, error: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Singleton glue (FastAPI lifespan ставит, endpoints используют)
+# Singleton glue (set up by the FastAPI lifespan, used by the endpoints)
 # ---------------------------------------------------------------------------
 
 _dispatcher: WebhookDispatcher | None = None
@@ -278,7 +278,7 @@ async def shutdown_dispatcher() -> None:
 
 
 async def emit_event(event: str, payload: dict[str, Any]) -> None:
-    """Convenience: emit без blocking. Безопасно если dispatcher не инициализирован."""
+    """Convenience: emit without blocking. Safe if the dispatcher is not initialised."""
     if _dispatcher is None:
         return
     try:

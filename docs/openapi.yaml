@@ -17,7 +17,7 @@ paths:
   /p/{project_id}:
     get:
       summary: Index For Project
-      description: 'SPA-style: тот же HTML, frontend читает project_id из location.pathname.'
+      description: 'SPA-style: same HTML, the frontend reads project_id from location.pathname.'
       operationId: index_for_project_p__project_id__get
       parameters:
       - name: project_id
@@ -154,7 +154,7 @@ paths:
   /api/projects/{project_id}/plan-candidates:
     get:
       summary: List Plan Candidates
-      description: Plan-кандидаты для существующего проекта (использует project.path).
+      description: Plan-file candidates for an existing project (uses project.path).
       operationId: list_plan_candidates_api_projects__project_id__plan_candidates_get
       parameters:
       - name: project_id
@@ -182,8 +182,8 @@ paths:
   /api/system/list-md-files:
     get:
       summary: List Md Files
-      description: Plan-кандидаты по произвольному пути (для wizard'а до создания
-        проекта).
+      description: Plan-file candidates for an arbitrary path (used by the wizard
+        before the project is created).
       operationId: list_md_files_api_system_list_md_files_get
       parameters:
       - name: path
@@ -263,7 +263,7 @@ paths:
   /api/projects/{project_id}/source/plan-new:
     post:
       summary: Setup Source Plan New
-      description: Создаёт PLAN.md в project.path, обновляет CLAUDE.md, регистрирует
+      description: Creates PLAN.md in project.path, updates CLAUDE.md, registers the
         source.
       operationId: setup_source_plan_new_api_projects__project_id__source_plan_new_post
       parameters:
@@ -292,10 +292,9 @@ paths:
   /api/projects/{project_id}/source/plan-local:
     post:
       summary: Setup Source Plan Local
-      description: 'Подключает один или несколько plan-файлов, импортирует задачи
-        из всех,
+      description: 'Connect one or more plan files, import tasks from all of them,
 
-        обновляет CLAUDE.md (упоминая первый файл как канонический).'
+        and update CLAUDE.md (mentioning the first file as the canonical one).'
       operationId: setup_source_plan_local_api_projects__project_id__source_plan_local_post
       parameters:
       - name: project_id
@@ -329,8 +328,7 @@ paths:
   /api/projects/{project_id}/source/git:
     post:
       summary: Setup Source Git
-      description: 'Регистрирует git-источник: URL в config, token в .env-secrets
-        (0600).'
+      description: 'Registers a git source: URL in config, token in .env-secrets (0600).'
       operationId: setup_source_git_api_projects__project_id__source_git_post
       parameters:
       - name: project_id
@@ -620,7 +618,7 @@ paths:
   /api/automation/status:
     get:
       summary: Get Automation Status
-      description: Состояние inbox watcher, rule engine и webhook dispatcher.
+      description: State of the inbox watcher, rule engine, and webhook dispatcher.
       operationId: get_automation_status_api_automation_status_get
       responses:
         '200':
@@ -634,12 +632,12 @@ paths:
   /api/system/claude-auth-status:
     get:
       summary: Claude Auth Status
-      description: 'Текущий статус авторизации Claude Code CLI.
+      description: 'Current authorisation status of the Claude Code CLI.
 
 
-        Возвращает ``{"available": false}`` если бинарник не найден,
+        Returns ``{"available": false}`` if the binary is missing,
 
-        иначе ``{"available": true, "loggedIn": bool, "authMethod": str}``.'
+        otherwise ``{"available": true, "loggedIn": bool, "authMethod": str}``.'
       operationId: claude_auth_status_api_system_claude_auth_status_get
       responses:
         '200':
@@ -653,14 +651,16 @@ paths:
   /api/system/claude-auth-login:
     post:
       summary: Claude Auth Login
-      description: 'Запускает ``claude auth login --claudeai`` в фоне.
+      description: 'Runs ``claude auth login --claudeai`` in the background.
 
 
-        Команда сама откроет OAuth-flow в браузере. Endpoint не ждёт завершения —
+        The command opens the OAuth flow in a browser on its own. This endpoint
 
-        возвращает сразу же. Пользователь после успешного логина увидит обновлённый
+        does not wait for completion — it returns immediately. After a successful
 
-        status через poll на /api/system/claude-auth-status.'
+        login the user sees the refreshed state by polling
+
+        /api/system/claude-auth-status.'
       operationId: claude_auth_login_api_system_claude_auth_login_post
       responses:
         '200':
@@ -674,13 +674,13 @@ paths:
   /api/system/pick-folder:
     post:
       summary: Pick Folder
-      description: 'Открывает нативный диалог выбора папки (macOS / Linux+zenity /
-        Windows).
+      description: 'Opens a native folder picker dialog (macOS / Linux+zenity / Windows).
 
 
-        Возвращает ``{"path": "/abs/path"}`` или ``{"path": null, "cancelled": true}``,
+        Returns ``{"path": "/abs/path"}`` or ``{"path": null, "cancelled": true}``
 
-        если пользователь нажал Отмена. Если на платформе нет picker''а — 501.'
+        when the user clicks Cancel. When no picker is available on the platform —
+        501.'
       operationId: pick_folder_api_system_pick_folder_post
       responses:
         '200':
@@ -694,7 +694,7 @@ paths:
   /api/system/pick-file:
     post:
       summary: Pick File
-      description: Открывает нативный диалог выбора файла. macOS only пока.
+      description: Opens a native file picker dialog. macOS only for now.
       operationId: pick_file_api_system_pick_file_post
       parameters:
       - name: default_location
@@ -871,7 +871,7 @@ components:
             type: string
           type: array
           title: Files
-          description: пути к plan-файлам относительно project.path (можно несколько)
+          description: paths to plan files relative to project.path (multiple allowed)
         file:
           anyOf:
           - type: string

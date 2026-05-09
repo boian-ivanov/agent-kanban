@@ -32,12 +32,12 @@ The kanban server is the same in all three cases — the difference is only how 
 }
 ```
 
-⚠ **`PYTHONPATH` обязателен**: Claude Code запускает stdio MCP server игнорируя поле `cwd` — без `PYTHONPATH` python не найдёт модуль `kanban_mcp` и MCP отвалится с `Failed to connect`.
+**`PYTHONPATH` is required**: Claude Code launches the stdio MCP server while ignoring the `cwd` field — without `PYTHONPATH`, python won't find the `kanban_mcp` module and MCP fails with `Failed to connect`.
 
-`KANBAN_DB` — абсолютный путь к SQLite (особенно важно если Claude Code и канбан в разных директориях).
-`KANBAN_PROJECT_ID` — дефолтный проект для `kanban_create` без аргумента.
+`KANBAN_DB` — absolute path to the SQLite file (especially important if Claude Code and the kanban live in different directories).
+`KANBAN_PROJECT_ID` — default project for `kanban_create` calls without an argument.
 
-Restart Claude Code (или `claude mcp list` чтобы проверить `✓ Connected`). 14 tools become available:
+Restart Claude Code (or run `claude mcp list` to confirm `✓ Connected`). 14 tools become available:
 
 | Tool | Purpose |
 |---|---|
@@ -179,8 +179,8 @@ Key endpoints:
 
 ## Outbound webhooks (Slack / Telegram / generic)
 
-Канбан умеет посылать HTTP-уведомления при изменениях. Конфиг —
-`kanban_data/webhooks.json`, hot-reload по mtime:
+The kanban can fire HTTP notifications on changes. Config:
+`kanban_data/webhooks.json`, hot-reloaded by mtime:
 
 ```json
 {
@@ -208,38 +208,38 @@ Key endpoints:
 }
 ```
 
-Поля:
+Fields:
 - `events`: `task_created` / `task_moved` / `task_commented` / `task_updated`
-- `format`: `slack` (`{text: "..."}`), `telegram` (`{text: "..."}`, `chat_id` в URL), `generic` (raw JSON)
-- `project_id`: ограничить webhook одним проектом; `null` = все проекты
-- `enabled`: по умолчанию `true`
+- `format`: `slack` (`{text: "..."}`), `telegram` (`{text: "..."}`, `chat_id` in URL), `generic` (raw JSON)
+- `project_id`: limit a webhook to one project; `null` = all projects
+- `enabled`: defaults to `true`
 
-Доставка — **fire-and-forget asyncio task**: основной HTTP-запрос пользователя
-не блокируется на webhook-таймаутах. Логи срабатываний (status_code, ms) в
+Delivery is a **fire-and-forget asyncio task**: the user's main HTTP request
+isn't blocked on webhook timeouts. Delivery logs (status_code, ms) live at
 `/api/automation/status.webhooks.last_deliveries`.
 
-### Как получить URL для Slack / Telegram
+### How to get a Slack / Telegram URL
 
-- **Slack**: Workspace → Apps → Incoming Webhooks → Add → выбираешь канал → копируешь URL.
+- **Slack**: Workspace → Apps → Incoming Webhooks → Add → pick a channel → copy the URL.
 - **Telegram**:
   ```bash
-  curl https://api.telegram.org/bot<TOKEN>/getMe          # проверить токен
-  curl https://api.telegram.org/bot<TOKEN>/getUpdates     # узнать chat_id
+  curl https://api.telegram.org/bot<TOKEN>/getMe          # verify the token
+  curl https://api.telegram.org/bot<TOKEN>/getUpdates     # find your chat_id
   ```
-  Потом URL: `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>`.
+  Then the URL: `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>`.
 
 ## Capturing Claude Code sessions
 
-Если хочешь автоматически создавать задачи из заметок Claude после каждой
-сессии — настрой Stop-hook (или slash-команду) на запись резюме в
-`~/.claude/projects/<encoded-path>/memory/inbox/<timestamp>.md`, и укажи:
+If you want tasks auto-created from Claude's session notes — wire up a
+Stop-hook (or a slash command) to write a summary into
+`~/.claude/projects/<encoded-path>/memory/inbox/<timestamp>.md`, and set:
 
 ```bash
 export KANBAN_INBOX_DIR=~/.claude/projects/-Users-you-myproj/memory/inbox
 ```
 
-Inbox watcher подхватит файл через 5 сек и превратит в карточку. См.
-`Inbox: авто-создание карточек из markdown` в [README.md](../README.md).
+The inbox watcher picks the file up within 5 seconds and turns it into a card.
+See `Inbox watcher` in [README.md](../README.md).
 
 ## CORS
 

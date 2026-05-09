@@ -1,14 +1,14 @@
 -- Kanban schema (SQLite)
--- v2: добавлены projects + tasks.project_id (миграция в Store._migrate_v2).
+-- v2: added projects + tasks.project_id (migration in Store._migrate_v2).
 
 CREATE TABLE IF NOT EXISTS projects (
     id          TEXT PRIMARY KEY,                    -- 'finops', 'kanban-dev', ...
     name        TEXT NOT NULL,                       -- 'FinOps', 'Kanban Dev'
-    color       TEXT NOT NULL DEFAULT '#F10D30',     -- акцентный цвет проекта (hex)
-    icon        TEXT NOT NULL DEFAULT '',            -- 1-2 символа: 'F', 'KB', 'AI'
-    sort_order  INTEGER NOT NULL DEFAULT 0,          -- порядок в свитчере
+    color       TEXT NOT NULL DEFAULT '#F10D30',     -- accent color of the project (hex)
+    icon        TEXT NOT NULL DEFAULT '',            -- 1-2 chars: 'F', 'KB', 'AI'
+    sort_order  INTEGER NOT NULL DEFAULT 0,          -- order in the project switcher
     archived    INTEGER NOT NULL DEFAULT 0,          -- 0/1
-    path        TEXT,                                -- директория Claude Code-проекта (опц.)
+    path        TEXT,                                -- Claude Code project directory (optional)
     created_at  TEXT NOT NULL                        -- ISO8601
 );
 
@@ -24,13 +24,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     external_blocker TEXT,                           -- "DevOps: roles monitoring.viewer"
     created_at      TEXT NOT NULL,                   -- ISO8601
     moved_at        TEXT NOT NULL,                   -- ISO8601, last status change
-    column_order    INTEGER NOT NULL DEFAULT 0,      -- порядок внутри колонки (для drag-drop)
-    project_id      TEXT NOT NULL DEFAULT 'default'  -- FK → projects.id
+    column_order    INTEGER NOT NULL DEFAULT 0,      -- order within the column (for drag-drop)
+    project_id      TEXT NOT NULL DEFAULT 'default'  -- FK -> projects.id
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, column_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
--- idx_tasks_project_status создаётся в Store._migrate_v2 (после ALTER TABLE для старых БД).
+-- idx_tasks_project_status is created in Store._migrate_v2 (after ALTER TABLE for older databases).
 
 CREATE TABLE IF NOT EXISTS task_links (
     task_id  TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS project_sources (
     created_at    TEXT NOT NULL
 );
 
--- meta для миграций
+-- meta for migrations
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -76,6 +76,6 @@ CREATE TABLE IF NOT EXISTS meta (
 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '4');
 INSERT OR IGNORE INTO meta(key, value) VALUES ('next_id', '1');
 
--- Дефолтный проект — берётся из env ``KANBAN_DEFAULT_PROJECT_ID`` / ``..._NAME``
--- (см. Store._seed_default_project). Если не задано, создаётся 'default'/'Default'.
--- Существующие задачи получат этот project_id через _migrate_v2().
+-- Default project — read from env ``KANBAN_DEFAULT_PROJECT_ID`` / ``..._NAME``
+-- (see Store._seed_default_project). If not provided, 'default'/'Default' is created.
+-- Existing tasks receive this project_id via _migrate_v2().

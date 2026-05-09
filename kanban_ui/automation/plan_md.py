@@ -1,16 +1,16 @@
-"""PLAN.md ↔ kanban синхронизация.
+"""PLAN.md ↔ kanban synchronisation.
 
-Формат файла:
+File format:
 
     # ProjectName — Plan
 
-    > Канбан читает этот файл. Каждая строка `- [ ] ...` под секцией
-    > соответствует карточке в этой колонке. Не редактируйте формат
-    > заголовков — engine ищет их жёстко.
+    > The kanban reads this file. Every `- [ ] ...` line under a section
+    > maps to a card in that column. Do not change the heading format —
+    > the engine matches them strictly.
 
     ## Backlog
-    - [ ] TTL для internal.* таблиц
-    - [ ] Сменить пароль web
+    - [ ] TTL for internal.* tables
+    - [ ] Rotate the web password
 
     ## In progress
     - [ ] Coder anti-loop counter
@@ -18,14 +18,14 @@
     ## Done
     - [x] Inbox watcher
 
-Этот модуль умеет:
-- ``parse_plan_md(text)`` — секции → ``status -> [titles]``.
-- ``init_plan_md(path, project)`` — создать пустой шаблон.
-- ``update_claude_md(path, project)`` — append блок про канбан-доску.
-- ``import_plan_md(store, project_id, file_path)`` — создаёт задачи в
-  канбане по содержимому файла; идемпотентно по (project_id, title).
+This module provides:
+- ``parse_plan_md(text)`` — sections → ``status -> [titles]``.
+- ``init_plan_md(path, project)`` — create an empty template.
+- ``update_claude_md(path, project)`` — append the kanban-board block.
+- ``import_plan_md(store, project_id, file_path)`` — create tasks in the
+  kanban from the file's contents; idempotent by (project_id, title).
 
-Двухсторонний sync (изменения в UI → обратно в файл) — отдельная фича.
+Two-way sync (UI edits → back to the file) is a separate feature.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from kanban_store import Store
 
 log = logging.getLogger("kanban.plan_md")
 
-# Маппинг заголовков (case-insensitive, без знаков пунктуации) на статусы.
+# Heading-to-status mapping (case-insensitive, punctuation stripped).
 HEADING_TO_STATUS: dict[str, str] = {
     "backlog": "backlog", "бэклог": "backlog",
     "approved": "approved", "согласовано": "approved",
@@ -71,13 +71,13 @@ _TASK_RE = re.compile(r"^\s*-\s*\[([ xX])\]\s+(.+?)\s*$")
 
 @dataclass(frozen=True)
 class ParsedTask:
-    """Одна `- [ ]` строка из plan-файла.
+    """A single `- [ ]` line from a plan file.
 
-    ``status`` — куда задача попадёт: либо canonical статус (``backlog``,
-    ``done`` и т.д.), либо ``backlog`` если секция не маппится на статус.
-    ``section_label`` — raw heading секции (с эмодзи и числами как есть)
-    для loose-секций; ``None`` для canonical (когда heading нашёлся в
-    ``HEADING_TO_STATUS``).
+    ``status`` — where the task ends up: either a canonical status
+    (``backlog``, ``done`` etc.) or ``backlog`` if the section does not
+    map to a status. ``section_label`` is the raw section heading (with
+    emoji or numbers preserved) for loose sections; ``None`` for
+    canonical sections (when the heading was found in ``HEADING_TO_STATUS``).
     """
     title: str
     done: bool
@@ -90,18 +90,18 @@ def _norm_heading(s: str) -> str:
 
 
 def parse_plan_md(text: str) -> list[ParsedTask]:
-    """Парсит PLAN.md в список ``ParsedTask`` (порядок сохраняется).
+    """Parses PLAN.md into a list of ``ParsedTask`` (order preserved).
 
-    Поведение:
+    Behaviour:
 
-    * Заголовки, которые маппятся через ``HEADING_TO_STATUS``
-      (``## Backlog``, ``## In progress``, ``## Done`` etc.) — задачи
-      попадают в соответствующую колонку, ``section_label=None``.
-    * Любые другие заголовки (``## 🔴 Tier 0``, ``## v2 этапы``,
-      ``## Status snapshot``) — это loose-секции; задачи под ними
-      попадают в ``backlog``, имя секции (как написано) — в
-      ``section_label`` для последующего отображения в description.
-    * Задачи до первого ``##`` игнорируются.
+    * Headings that map via ``HEADING_TO_STATUS`` (``## Backlog``,
+      ``## In progress``, ``## Done`` etc.) — tasks are placed into the
+      corresponding column with ``section_label=None``.
+    * Any other heading (``## 🔴 Tier 0``, ``## v2 stages``,
+      ``## Status snapshot``) is a loose section; tasks under it land in
+      ``backlog`` and the section name (as written) goes into
+      ``section_label`` for later display in the description.
+    * Tasks above the first ``##`` heading are ignored.
     """
     result: list[ParsedTask] = []
     current_status: str | None = None
@@ -135,17 +135,17 @@ def parse_plan_md(text: str) -> list[ParsedTask]:
 
 
 def render_plan_template(project_name: str, project_id: str) -> str:
-    """Шаблон для нового PLAN.md."""
+    """Template for a new PLAN.md."""
     return (
         f"# {project_name} — Plan\n\n"
-        f"> Этот файл синхронизируется с канбан-доской: "
+        f"> This file is synced with the kanban board: "
         f"http://localhost:7777/p/{project_id}\n"
-        f"> Каждая строка `- [ ] ...` под заголовком колонки = карточка в "
-        f"этой колонке.\n"
-        f"> Допустимые заголовки колонок: Backlog, Approved, Analyst, "
-        f"In progress, Testing, UAT, Done, Blocked, Cancelled (русский тоже OK).\n\n"
+        f"> Every `- [ ] ...` line under a column heading = a card in "
+        f"that column.\n"
+        f"> Allowed column headings: Backlog, Approved, Analyst, "
+        f"In progress, Testing, UAT, Done, Blocked, Cancelled (Russian also OK).\n\n"
         f"## Backlog\n\n"
-        f"- [ ] (новые задачи попадают сюда)\n\n"
+        f"- [ ] (new tasks land here)\n\n"
         f"## In progress\n\n"
         f"## Done\n"
     )
@@ -155,17 +155,17 @@ CLAUDE_MD_BLOCK_MARKER = "<!-- KANBAN-BOARD-BLOCK -->"
 
 CLAUDE_MD_TEMPLATE = """\
 {marker}
-## Канбан-доска ({project_name})
+## Kanban board ({project_name})
 
-Все новые задачи этого проекта пиши в [PLAN.md]({plan_path}) — строкой
-`- [ ] {{title}}` под `## Backlog`. Когда берёшь задачу в работу — перенеси
-её под `## In progress`. Закрытые → `## Done`. Заблокированные → `## Blocked`.
+Write every new task for this project into [PLAN.md]({plan_path}) as a
+`- [ ] {{title}}` line under `## Backlog`. When you start a task, move
+it under `## In progress`. Closed → `## Done`. Blocked → `## Blocked`.
 
-Канбан-доска — http://localhost:7777/p/{project_id} — синхронизируется
-с этим файлом. Изменения в UI обновляют PLAN.md (двусторонний sync будет
-добавлен в следующем релизе; пока что file → канбан).
+The kanban board — http://localhost:7777/p/{project_id} — is synced with
+this file. UI changes update PLAN.md (two-way sync will be added in a
+future release; for now only file → kanban).
 
-Поддерживаемые колонки (заголовки в PLAN.md): Backlog, Approved, Analyst,
+Supported columns (PLAN.md headings): Backlog, Approved, Analyst,
 In progress, Testing, UAT, Done, Blocked, Cancelled.
 {marker_end}
 """
@@ -173,9 +173,10 @@ In progress, Testing, UAT, Done, Blocked, Cancelled.
 
 def update_claude_md(claude_md_path: Path, project_id: str, project_name: str,
                      plan_relative: str = "PLAN.md") -> None:
-    """Добавляет/обновляет блок «Канбан-доска» в CLAUDE.md.
+    """Adds/updates the "Kanban board" block in CLAUDE.md.
 
-    Если файла нет — создаёт. Если есть — ищет marker и заменяет блок.
+    If the file does not exist, it is created. If it does, the marker is
+    located and the block is replaced.
     """
     block = CLAUDE_MD_TEMPLATE.format(
         marker=CLAUDE_MD_BLOCK_MARKER,
@@ -189,7 +190,7 @@ def update_claude_md(claude_md_path: Path, project_id: str, project_name: str,
         return
     existing = claude_md_path.read_text(encoding="utf-8")
     if CLAUDE_MD_BLOCK_MARKER in existing:
-        # Заменяем блок между marker и marker_end
+        # Replace the block between marker and marker_end
         pattern = re.compile(
             re.escape(CLAUDE_MD_BLOCK_MARKER) + r".*?"
             + re.escape(CLAUDE_MD_BLOCK_MARKER + " end") + r"\n?",
@@ -204,7 +205,7 @@ def update_claude_md(claude_md_path: Path, project_id: str, project_name: str,
 
 def init_plan_md(path: Path, project_id: str, project_name: str,
                  *, overwrite: bool = False) -> Path:
-    """Создаёт PLAN.md в указанной директории. Возвращает путь к созданному файлу."""
+    """Creates PLAN.md in the given directory. Returns the path to the created file."""
     plan_path = path / "PLAN.md"
     if plan_path.exists() and not overwrite:
         return plan_path
@@ -216,13 +217,13 @@ def init_plan_md(path: Path, project_id: str, project_name: str,
 
 
 def import_plan_md(store: Store, project_id: str, plan_file: Path) -> dict[str, int]:
-    """Парсит PLAN.md и создаёт задачи в проекте.
+    """Parses PLAN.md and creates tasks in the project.
 
-    Идемпотентно: задача с тем же title в этом проекте не создаётся повторно.
-    Если задача пришла из loose-секции (``section_label`` не None),
-    в её description добавляется префикс ``_From section:_ **<label>**`` —
-    видимый в карточке как контекст.
-    Возвращает ``{"created": N, "skipped": K}``.
+    Idempotent: a task with the same title in this project is not created
+    twice. If a task came from a loose section (``section_label`` is not
+    None), its description gets a ``_From section:_ **<label>**`` prefix
+    that is visible on the card as context.
+    Returns ``{"created": N, "skipped": K}``.
     """
     text = plan_file.read_text(encoding="utf-8")
     parsed = parse_plan_md(text)
@@ -233,7 +234,7 @@ def import_plan_md(store: Store, project_id: str, plan_file: Path) -> dict[str, 
         if task.title in existing_titles:
             skipped += 1
             continue
-        # Если строка [x] и статус не cancelled — ставим done.
+        # If a [x] line and the status is not cancelled, mark it as done.
         real_status = (
             "done" if task.done and task.status != "cancelled" else task.status
         )

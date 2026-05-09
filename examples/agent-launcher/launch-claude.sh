@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# launch-claude.sh — пример агент-лаунчера для agent-kanban.
+# launch-claude.sh — example agent launcher for agent-kanban.
 #
-# Вызывается из rule engine при перемещении задачи в выбранный статус.
-# Пример конфига в kanban_data/rules.json:
+# Invoked by the rule engine when a task is moved into a chosen status.
+# Example config snippet in kanban_data/rules.json:
 #
 #   {
 #     "name": "Auto-claim approved tasks",
@@ -20,37 +20,37 @@
 #     }
 #   }
 #
-# Аргументы:
-#   $1 — task_id (например T-027)
-#   $2 — project_id (например myproj)
+# Arguments:
+#   $1 — task_id (e.g. T-027)
+#   $2 — project_id (e.g. myproj)
 #
-# Что делает:
-#   1) Готовит prompt для Claude Code из task data (через REST API канбана).
-#   2) Запускает headless Claude (`claude -p`) в фоне в директории проекта.
-#   3) Claude через MCP-сервер агент-канбана (kanban_pull → kanban_move) сам
-#      проводит задачу через статусы analyst → in_progress → testing.
+# What it does:
+#   1) Builds a Claude Code prompt from the task data (via the kanban REST API).
+#   2) Launches headless Claude (`claude -p`) in the background inside the project directory.
+#   3) Claude uses the agent-kanban MCP server (kanban_pull -> kanban_move) to
+#      drive the task through analyst -> in_progress -> testing on its own.
 #
-# ВАЖНО:
-#   - Скрипт должен запускать агента в **директории Claude Code-проекта**
-#     (там лежит .mcp.json с подключением к agent-kanban).
-#   - Сам канбан в этом скрипте — только источник контекста через REST.
+# IMPORTANT:
+#   - The script must launch the agent inside the **Claude Code project
+#     directory** (where .mcp.json with the agent-kanban entry lives).
+#   - The kanban itself is only a context source via REST in this script.
 
 set -euo pipefail
 
-# launchd-процесс имеет узкий PATH; расширяем чтобы найти `claude`,
-# `node`, `nvm shims`, etc. Меняй под свою установку.
+# A launchd process has a narrow PATH; widen it so `claude`, `node`,
+# `nvm shims`, etc. are reachable. Tweak for your install.
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 TASK_ID="${1:?usage: launch-claude.sh <task_id> [project_id]}"
 PROJECT_ID="${2:-}"
 KANBAN_URL="${KANBAN_URL:-http://localhost:7777}"
 
-# Резолвим claude. Порядок:
-#   1) env CLAUDE_BIN (явное переопределение)
-#   2) `command -v claude` в PATH
-#   3) latest версия из ~/Library/Application Support/Claude/claude-code/*/
-#      (на macOS Claude Code хранится так; симлинк ~/.local/bin/claude
-#      может протухнуть после обновлений — fallback'имся к самой свежей).
+# Resolve `claude`. Order:
+#   1) env CLAUDE_BIN (explicit override)
+#   2) `command -v claude` on PATH
+#   3) Latest version under ~/Library/Application Support/Claude/claude-code/*/
+#      (on macOS Claude Code lives there; the ~/.local/bin/claude symlink
+#      can go stale after updates, so we fall back to the freshest build).
 _resolve_claude() {
     [[ -n "${CLAUDE_BIN:-}" ]] && { echo "$CLAUDE_BIN"; return; }
     local p
@@ -58,7 +58,7 @@ _resolve_claude() {
     [[ -n "$p" && -x "$p" ]] && { echo "$p"; return; }
     local mac_root="$HOME/Library/Application Support/Claude/claude-code"
     if [[ -d "$mac_root" ]]; then
-        # самая свежая версия по mtime
+        # newest version by mtime
         local latest
         latest="$(/bin/ls -1t "$mac_root" 2>/dev/null | head -1)"
         if [[ -n "$latest" ]]; then
@@ -77,14 +77,14 @@ if [[ -z "$CLAUDE_BIN" ]]; then
     exit 1
 fi
 
-# 1) Получить полную карточку задачи (title + description + acceptance + links)
+# 1) Fetch the full task card (title + description + acceptance + links)
 TASK_JSON="$(curl -fsS "${KANBAN_URL}/api/tasks/${TASK_ID}")"
 
 TITLE="$(echo "$TASK_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title",""))')"
 DESC="$(echo "$TASK_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("description",""))')"
 ACCEPTANCE="$(echo "$TASK_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("acceptance",""))')"
 
-# 2) Найти директорию проекта (project.path)
+# 2) Find the project directory (project.path)
 if [[ -n "$PROJECT_ID" ]]; then
     PROJ_PATH="$(curl -fsS "${KANBAN_URL}/api/projects" \
         | python3 -c "import json,sys; ps=json.load(sys.stdin)['projects']; \
@@ -95,7 +95,7 @@ if [[ -n "$PROJECT_ID" ]]; then
         exit 1
     fi
 else
-    # Если project_id не передан — используем текущую директорию.
+    # If project_id was not passed in, fall back to the current directory.
     PROJ_PATH="$PWD"
 fi
 
@@ -104,21 +104,21 @@ if [[ ! -d "$PROJ_PATH" ]]; then
     exit 1
 fi
 
-# 3) Сформировать prompt для агента
+# 3) Build the agent prompt
 PROMPT=$(cat <<EOF
-Ты подключён к agent-kanban через MCP-сервер. Тебе нужно взять и
-полностью реализовать задачу ${TASK_ID}.
+You're connected to agent-kanban via MCP. Take task ${TASK_ID} and complete it.
 
 Workflow:
-  1. kanban_pull(task_id="${TASK_ID}")  — забрать задачу (approved → analyst).
-  2. Прочитать описание ниже, разобраться, написать план как комментарий
-     через kanban_comment.
+  1. kanban_pull(task_id="${TASK_ID}") — claim it (approved -> analyst).
+  2. Read the description below, plan it, write the plan as a comment
+     via kanban_comment.
   3. kanban_move(task_id="${TASK_ID}", to_status="in_progress")
-  4. Реализовать. По ходу — kanban_comment с прогрессом, kanban_link на PR/файлы.
-  5. kanban_move(task_id="${TASK_ID}", to_status="testing", comment="готово к проверке")
-  6. Остановиться. Не двигай в "uat" / "done" — это решает человек.
+  4. Implement it. Along the way: kanban_comment for progress,
+     kanban_link for PRs/files.
+  5. kanban_move(task_id="${TASK_ID}", to_status="testing", comment="ready for review")
+  6. Stop. Do not move into "uat" / "done" — a human decides that.
 
-=== Контекст задачи ===
+=== Task context ===
 ID:          ${TASK_ID}
 Title:       ${TITLE}
 
@@ -127,17 +127,17 @@ ${DESC}
 
 Acceptance criteria:
 ${ACCEPTANCE}
-=== Конец контекста ===
+=== End of context ===
 
-Если задача неоднозначная — добавь kanban_comment с уточняющими вопросами
-и переведи задачу в "blocked". Не пытайся угадывать.
+If the task is ambiguous, add a kanban_comment with clarifying questions
+and move the task to "blocked". Do not try to guess.
 EOF
 )
 
-# 4) Запуск Claude Code в headless-режиме в директории проекта.
-# Флаг `-p`/`--print` означает «выполнить и выйти» (без интерактивного REPL).
-# `--permission-mode=acceptEdits` — для автоматизации (без ручных confirms).
-# Перенаправляем stdout/stderr в лог чтобы видеть прогресс.
+# 4) Launch Claude Code headless in the project directory.
+# The `-p`/`--print` flag means "run and exit" (no interactive REPL).
+# `--permission-mode=acceptEdits` — for automation (no manual confirms).
+# Redirect stdout/stderr to a log so progress is visible.
 
 LOG_DIR="${HOME}/Library/Logs/agent-kanban"
 mkdir -p "$LOG_DIR"
@@ -145,12 +145,12 @@ LOG_FILE="${LOG_DIR}/launcher-${TASK_ID}-$(date +%Y%m%d-%H%M%S).log"
 
 echo "[$(date -u +%FT%TZ)] launch ${TASK_ID} in ${PROJ_PATH} (log: ${LOG_FILE})" >&2
 
-# Имя MCP-сервера в .mcp.json пользователя (alias). Дефолт — "agent-kanban",
-# но у тебя может быть "finops-kanban" / "kanban" / любое.
+# MCP server alias from the user's .mcp.json. Default is "agent-kanban",
+# but yours could be "finops-kanban" / "kanban" / anything.
 MCP_ALIAS="${KANBAN_MCP_ALIAS:-agent-kanban}"
 
-# Разрешённые tools в headless режиме. Без --allowedTools Claude видит MCP,
-# но отказывается их вызывать с "tool not allowed".
+# Allow-list of tools in headless mode. Without --allowedTools Claude sees
+# the MCP entries but refuses to call them with "tool not allowed".
 ALLOWED_TOOLS="\
 mcp__${MCP_ALIAS}__kanban_columns \
 mcp__${MCP_ALIAS}__kanban_get \

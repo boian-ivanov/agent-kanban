@@ -1,8 +1,8 @@
 """Background automation: inbox watcher + rule engine.
 
-Подключаются в FastAPI app через lifespan (см. kanban_ui/main.py):
-``inbox_watcher_task`` и ``rule_engine_task`` запускаются как
-asyncio-задачи и отменяются при shutdown.
+Wired into the FastAPI app through the lifespan (see kanban_ui/main.py):
+``inbox_watcher_task`` and ``rule_engine_task`` are started as asyncio
+tasks and cancelled on shutdown.
 """
 from .inbox import InboxWatcher, inbox_status
 from .rules import RuleEngine, rules_status, emit_rule_event

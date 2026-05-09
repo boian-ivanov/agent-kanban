@@ -1,1 +1,1 @@
-"""Seed: импорт стартового набора задач (3 generic example task)."""
+"""Seed: imports a starter set of tasks (3 generic example tasks)."""

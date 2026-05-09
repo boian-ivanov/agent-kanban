@@ -76,7 +76,7 @@ def run(user_message: str) -> str:
             return msg.get("content", "")
         for tc in msg["tool_calls"]:
             name = tc["function"]["name"]
-            args = tc["function"]["arguments"]  # уже dict в Ollama
+            args = tc["function"]["arguments"]  # already a dict in Ollama
             if isinstance(args, str):
                 args = json.loads(args)
             result = dispatch(name, args)
