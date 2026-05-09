@@ -157,16 +157,39 @@ CLAUDE_MD_TEMPLATE = """\
 {marker}
 ## Kanban board ({project_name})
 
-Write every new task for this project into [PLAN.md]({plan_path}) as a
-`- [ ] {{title}}` line under `## Backlog`. When you start a task, move
-it under `## In progress`. Closed → `## Done`. Blocked → `## Blocked`.
+Kanban board — http://localhost:7777/p/{project_id}. MCP server is wired
+in via `.mcp.json` at the repo root (14 tools `mcp__<alias>__kanban_*`).
 
-The kanban board — http://localhost:7777/p/{project_id} — is synced with
-this file. UI changes update PLAN.md (two-way sync will be added in a
-future release; for now only file → kanban).
+### Agent workflow rules (strict)
 
-Supported columns (PLAN.md headings): Backlog, Approved, Analyst,
-In progress, Testing, UAT, Done, Blocked, Cancelled.
+When you take a task from the kanban:
+
+1. **Before editing any files** — call `kanban_move(task_id,
+   "in_progress")`. The human needs to see that work has actually
+   started, not just been announced in chat.
+2. **As you work** — `kanban_comment(task_id, ...)` with the plan,
+   blockers, decisions. These land in `task_history` and show up in
+   the UI.
+3. **When implementation is complete** — `kanban_move(task_id,
+   "testing", comment="ready for review")`. **Never move a task to
+   `done` yourself.** `done` is reserved for the human after review
+   through the UI.
+4. If you get stuck — `kanban_move(task_id, "blocked",
+   comment="what's blocking")`.
+
+Skipping step 1 (silently editing files) or jumping to `done` makes
+the board lie about the real state — the human can't tell what you
+actually claimed vs. just described in chat.
+
+### Plan-file sync
+
+New tasks for this project go into [PLAN.md]({plan_path}) as
+`- [ ] {{title}}` lines under `## Backlog`. Move them under
+`## In progress` / `## Done` / `## Blocked` as state changes (file →
+kanban for now; bidirectional sync is planned).
+
+Supported PLAN.md headings: Backlog, Approved, Analyst, In progress,
+Testing, UAT, Done, Blocked, Cancelled.
 {marker_end}
 """
 

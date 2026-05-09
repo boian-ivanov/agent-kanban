@@ -25,7 +25,8 @@ The kanban server is the same in all three cases — the difference is only how 
       "env": {
         "PYTHONPATH": "/abs/path/to/agent-kanban",
         "KANBAN_DB":  "/abs/path/to/agent-kanban/tasks.db",
-        "KANBAN_PROJECT_ID": "myproj"
+        "KANBAN_PROJECT_ID": "myproj",
+        "KANBAN_ACTOR": "claude"
       }
     }
   }
@@ -36,6 +37,7 @@ The kanban server is the same in all three cases — the difference is only how 
 
 `KANBAN_DB` — absolute path to the SQLite file (especially important if Claude Code and the kanban live in different directories).
 `KANBAN_PROJECT_ID` — default project for `kanban_create` calls without an argument.
+`KANBAN_ACTOR` — author name written into `task_history` for every move/comment the agent makes. Set this to something other than `user` (e.g. `claude`) so the history clearly distinguishes agent actions from human drag-drops in the UI.
 
 Restart Claude Code (or run `claude mcp list` to confirm `✓ Connected`). 14 tools become available:
 

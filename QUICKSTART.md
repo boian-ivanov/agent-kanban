@@ -74,7 +74,8 @@ At the root of the code directory, create `.mcp.json`:
       "env": {
         "PYTHONPATH": "/abs/path/to/agent-kanban",
         "KANBAN_DB":  "/abs/path/to/agent-kanban/tasks.db",
-        "KANBAN_PROJECT_ID": "myproj"
+        "KANBAN_PROJECT_ID": "myproj",
+        "KANBAN_ACTOR": "claude"
       }
     }
   }
