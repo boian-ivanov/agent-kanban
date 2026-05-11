@@ -40,15 +40,29 @@ Toggle theme with `t`, cycle profiles with `p`. Or pin a theme/profile via URL: 
 
 **5 minutes from clone to an AI agent doing your work for you:** see [QUICKSTART.md](QUICKSTART.md).
 
-Bare minimum:
+Bare minimum (one command after install):
 
 ```bash
+# Install uv once: `curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`
 git clone https://github.com/<your-user>/agent-kanban.git
 cd agent-kanban
+uv run python -m kanban_ui                     # http://localhost:7777
+```
+
+`uv run` auto-creates a `.venv/`, installs deps from `pyproject.toml` (~5 sec on a warm cache), and launches the server.
+
+<details>
+<summary>Legacy pip / venv path</summary>
+
+```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m kanban_ui                  # http://localhost:7777
 ```
+
+`requirements.txt` is kept in sync with `pyproject.toml` for Dependabot and pip-only environments.
+
+</details>
 
 Optional — auto-start on login (macOS):
 

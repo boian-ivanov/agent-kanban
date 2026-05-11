@@ -11,21 +11,35 @@ If you don't need AI, skip Part 2 and use it as a regular kanban board.
 - macOS / Linux (Windows — via WSL2)
 - A browser for the UI
 
-### Install
+### Install uv (once, ~5 sec)
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # or: brew install uv
+```
+
+### Clone + run
 
 ```bash
 git clone https://github.com/<user>/agent-kanban.git
 cd agent-kanban
-python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
-
-### Run
-
-```bash
-.venv/bin/python -m kanban_ui
+uv run python -m kanban_ui     # auto-creates .venv, installs deps, runs
 # open http://localhost:7777
 ```
+
+That's it — one command from clone to a running UI on `localhost:7777`. `uv` creates `.venv/`, installs the dependencies from `pyproject.toml` (cached after the first run), and starts the server.
+
+<details>
+<summary>Legacy pip / venv path (no uv)</summary>
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m kanban_ui
+```
+
+`requirements.txt` is kept in sync with `pyproject.toml`. The pip path is supported indefinitely — uv is just the faster default.
+
+</details>
 
 A `default` project shows up in the sidebar with an empty board and 9 columns.
 Hit `+ Task` (or press `n`) and create your first card.
