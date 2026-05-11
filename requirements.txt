@@ -2,3 +2,4 @@ fastapi>=0.115
 uvicorn[standard]>=0.32
 mcp>=1.0
 PyYAML>=6.0
+fastapi-mcp>=0.4

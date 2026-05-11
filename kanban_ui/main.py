@@ -943,3 +943,26 @@ async def pick_file(default_location: str = "") -> dict[str, Any]:
     if not path:
         return {"path": None, "cancelled": True}
     return {"path": path, "cancelled": False}
+
+
+# ---------------------------------------------------------------------------
+# Streamable HTTP MCP transport (mounted at /mcp).
+# ---------------------------------------------------------------------------
+#
+# Exposes the REST endpoints above as MCP tools over HTTP, so clients that
+# don't speak stdio (Cursor, new Cline versions, MCP Inspector, Open WebUI)
+# can attach without running a separate process. Parallel to the legacy
+# stdio server in ``kanban_mcp/`` — Claude Code's ``.mcp.json`` continues
+# to use stdio.
+from fastapi_mcp import FastApiMCP  # noqa: E402
+
+_mcp_http = FastApiMCP(
+    app,
+    name="agent-kanban",
+    description=(
+        "Local-first kanban for AI-agent workflows. Drag a task to Approved "
+        "and your AI agent drives it through analyst → in_progress → testing."
+    ),
+)
+_mcp_http.mount()
+log.info("HTTP MCP mounted at /mcp")
