@@ -72,6 +72,69 @@ Ask Cline: *"What's in my kanban backlog?"* — it should call `kanban_list(stat
 
 ---
 
+## HTTP MCP transport (`http://localhost:7777/mcp`)
+
+In addition to the stdio server in `kanban_mcp/`, the kanban also exposes a **streamable HTTP MCP endpoint** at `/mcp`, mounted by `fastapi_mcp` directly on top of the REST routes (same FastAPI app, same data, no extra process).
+
+Use this path when your MCP client doesn't speak stdio (Cursor, recent Cline) or for ad-hoc debugging (MCP Inspector). All operations available via the stdio server are available here too — same schemas.
+
+Quick smoke check that the endpoint is live:
+
+```bash
+curl -s -i --max-time 2 http://localhost:7777/mcp
+# → HTTP/1.1 200 OK
+# → content-type: text/event-stream
+# → event: endpoint
+# → data: /mcp/messages/?session_id=…
+```
+
+### Cursor (HTTP MCP) <a id="cursor-http-mcp"></a>
+
+[Cursor](https://cursor.com) speaks HTTP MCP natively.
+
+**Setup.** Open Cursor → `Cmd+,` (Settings) → search "MCP" → Add new server. Or edit `~/Library/Application Support/Cursor/User/settings.json` directly:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "agent-kanban": {
+        "url": "http://localhost:7777/mcp"
+      }
+    }
+  }
+}
+```
+
+Restart Cursor; in chat ask: *"What's in my kanban backlog for project myproj?"*. Cursor will call the kanban tools via the HTTP transport and respond with live state.
+
+### Cline (HTTP) <a id="cline-http-mcp"></a>
+
+Recent Cline versions (≥ 3.x) support HTTP MCP servers alongside stdio.
+
+**Setup.** VSCode → Cline panel → ⚙ Settings → MCP Servers → "Add HTTP server" → URL `http://localhost:7777/mcp`. Reload Cline.
+
+If you've been using the old stdio Cline config (section 2 above), you can keep both — Cline merges tool listings from all servers, but the kanban will appear twice. Pick one transport per Cline instance to avoid duplicate tools in the picker.
+
+### MCP Inspector <a id="mcp-inspector"></a>
+
+[modelcontextprotocol/inspector](https://github.com/modelcontextprotocol/inspector) is the canonical debugging tool for MCP servers — a browser-based UI that lets you call tools by hand, inspect schemas, and watch the SSE stream live.
+
+```bash
+npx @modelcontextprotocol/inspector http://localhost:7777/mcp
+# opens http://localhost:5173 in your browser
+```
+
+In the Inspector UI:
+
+1. **Transport:** auto-detected as SSE on first connect.
+2. **Tools tab:** lists all kanban operations exposed via the HTTP endpoint — click any to invoke with form inputs.
+3. **Network tab:** every request/response in raw JSON-RPC, useful when something feels off.
+
+This is the fastest way to verify a fresh install before wiring up a real client.
+
+---
+
 ## 3. opencode (REST + OpenAPI)
 
 [opencode](https://opencode.ai) (sst/opencode) doesn't speak MCP, but supports model-native function calling. Two integration approaches:

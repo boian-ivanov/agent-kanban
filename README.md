@@ -78,13 +78,18 @@ Logs: `~/Library/Logs/agent-kanban/{stdout,stderr}.log`.
 
 Pick the integration matching your agent:
 
-| Agent | Path | Reference |
+| Agent | Transport | Reference |
 |---|---|---|
-| **Claude Code** (Anthropic CLI) | MCP via `~/.claude.json` or `.mcp.json` | [docs/INTEGRATION.md#claude-code](docs/INTEGRATION.md#1-claude-code-mcp) |
-| **Cline** (VSCode extension) | MCP, same config block | [docs/INTEGRATION.md#cline](docs/INTEGRATION.md#2-cline-mcp) |
+| **Claude Code** (Anthropic CLI) | MCP stdio via `~/.claude.json` or `.mcp.json` | [docs/INTEGRATION.md#claude-code](docs/INTEGRATION.md#1-claude-code-mcp) |
+| **Cline** (VSCode extension, legacy stdio) | MCP stdio, same config block | [docs/INTEGRATION.md#cline](docs/INTEGRATION.md#2-cline-mcp) |
+| **🆕 Cursor** | HTTP MCP @ `http://localhost:7777/mcp` | [docs/INTEGRATION.md#cursor](docs/INTEGRATION.md#cursor-http-mcp) |
+| **🆕 Cline (new versions)** | HTTP MCP @ `http://localhost:7777/mcp` | [docs/INTEGRATION.md#cline-http](docs/INTEGRATION.md#cline-http-mcp) |
 | **opencode** (sst/opencode) | OpenAPI tools / REST | [docs/INTEGRATION.md#opencode](docs/INTEGRATION.md#3-opencode-rest--openapi) |
 | **Open WebUI** | OpenAPI Tool Server pointing at `/openapi.json` | [docs/INTEGRATION.md#open-webui](docs/INTEGRATION.md#4-open-webui-openapi-tool-server) |
 | **Generic LLM** (Hermes / Llama / Ollama / Mistral / vLLM) | function-calling + REST | [docs/INTEGRATION.md#generic-llm](docs/INTEGRATION.md#5-generic-function-calling-llm) |
+| **MCP Inspector** (debugging) | HTTP MCP @ `http://localhost:7777/mcp` | [docs/INTEGRATION.md#mcp-inspector](docs/INTEGRATION.md#mcp-inspector) |
+
+The kanban runs **two MCP transports in parallel**: legacy stdio (`python -m kanban_mcp`, for Claude Code) and streamable HTTP at `/mcp` (for Cursor / new Cline / Open WebUI / MCP Inspector / anything that speaks the MCP SSE transport).
 
 Static OpenAPI schema: [`docs/openapi.yaml`](docs/openapi.yaml). Interactive Swagger: `http://localhost:7777/docs`.
 
