@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS projects (
     icon        TEXT NOT NULL DEFAULT '',            -- 1-2 chars: 'F', 'KB', 'AI'
     sort_order  INTEGER NOT NULL DEFAULT 0,          -- order in the project switcher
     archived    INTEGER NOT NULL DEFAULT 0,          -- 0/1
-    path        TEXT,                                -- Claude Code project directory (optional)
+    path        TEXT,                                -- project directory (optional)
+    model       TEXT,                                -- omp model override (e.g. "deepinfra/deepseek-v4-flash")
     created_at  TEXT NOT NULL                        -- ISO8601
 );
 
@@ -73,7 +74,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '5');
 INSERT OR IGNORE INTO meta(key, value) VALUES ('next_id', '1');
 
 -- Default project — read from env ``KANBAN_DEFAULT_PROJECT_ID`` / ``..._NAME``

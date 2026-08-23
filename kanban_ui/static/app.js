@@ -425,6 +425,8 @@ async function handleDrop(evt) {
 }
 
 // ----------------------------------------------------------- Task modal
+// Holds the active EventSource for agent log streaming, if any.
+let agentLogSource = null;
 
 async function openTaskModal(taskId) {
   let t;
@@ -447,6 +449,47 @@ async function openTaskModal(taskId) {
   renderLinks(t.links);
   renderHistory(t.history);
   $("#m-comment").value = "";
+
+  // Agent log streaming: only for live statuses
+  const agentEl = $("#m-agent-output");
+  const logEl = $("#m-agent-logs");
+  const dotEl = $("#m-agent-dot");
+  // Close any previous stream
+  if (agentLogSource) { agentLogSource.close(); agentLogSource = null; }
+  if (t.status === "in_progress" || t.status === "testing" || t.status === "analyst") {
+    agentEl.hidden = false;
+    agentEl.open = true;
+    logEl.innerHTML = "";
+    dotEl.className = "agent-dot agent-dot--live";
+    agentLogSource = new EventSource(`/api/tasks/${t.id}/log/stream`);
+    agentLogSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.done) {
+          dotEl.className = "agent-dot agent-dot--done";
+          agentLogSource.close();
+          agentLogSource = null;
+          return;
+        }
+        if (data.lines) {
+          // Append new lines, remove the placeholder
+          const placeholder = logEl.querySelector(".muted");
+          if (placeholder) placeholder.remove();
+          logEl.appendChild(document.createTextNode(data.lines));
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+      } catch (_) {}
+    };
+    agentLogSource.onerror = () => {
+      dotEl.className = "agent-dot agent-dot--error";
+      agentLogSource.close();
+      agentLogSource = null;
+    };
+  } else {
+    agentEl.hidden = true;
+    dotEl.className = "agent-dot";
+  }
+
   $("#modal").hidden = false;
 }
 
@@ -489,6 +532,7 @@ function renderHistory(history) {
 function closeModal() {
   $("#modal").hidden = true;
   delete $("#modal").dataset.taskId;
+  if (agentLogSource) { agentLogSource.close(); agentLogSource = null; }
 }
 
 async function saveModal() {
@@ -501,6 +545,7 @@ async function saveModal() {
     priority: $("#m-priority").value,
     size: $("#m-size").value,
     external_blocker: $("#m-blocker").value.trim() || null,
+    assignee: $("#m-assignee").value.trim() || null,
   };
   try {
     await api("PATCH", `/api/tasks/${taskId}`, payload);
@@ -750,6 +795,7 @@ function openNewProj() {
   $("#p-id").value = "";
   $("#p-id").disabled = false;
   $("#p-path").value = "";
+  $("#p-model").value = "";
   $$(".swatch").forEach(s => s.classList.toggle("is-active", s.dataset.color === "#F10D30"));
   resetSourceWizard();
   $("#proj-modal").hidden = false;
@@ -764,6 +810,7 @@ function openEditProj(p) {
   $("#p-id").value = p.id;
   $("#p-id").disabled = true;     // id is immutable (FK on tasks)
   $("#p-path").value = p.path || "";
+  $("#p-model").value = p.model || "";
   $$(".swatch").forEach(s => s.classList.toggle("is-active", s.dataset.color === p.color));
   resetSourceWizard();
   showCurrentSource(p.id);
@@ -780,6 +827,7 @@ async function saveProj() {
   const name = $("#p-name").value.trim();
   const id = $("#p-id").value.trim();
   const path = $("#p-path").value.trim();
+  const model = $("#p-model").value.trim();
   const colorEl = $(".swatch.is-active");
   const color = colorEl ? colorEl.dataset.color : "#F10D30";
   // The icon is auto-generated from the first letter of the name; the
@@ -815,7 +863,7 @@ async function saveProj() {
   let savedId = editingProjId;
   if (editingProjId) {
     try {
-      await api("PATCH", `/api/projects/${editingProjId}`, { name, color, icon, path });
+      await api("PATCH", `/api/projects/${editingProjId}`, { name, color, icon, path, model });
     } catch (e) {
       toast(`Error: ${e.message}`, "err");
       return;
@@ -827,7 +875,7 @@ async function saveProj() {
       return;
     }
     try {
-      await api("POST", "/api/projects", { id, name, color, icon, path });
+      await api("POST", "/api/projects", { id, name, color, icon, path, model });
       savedId = id;
     } catch (e) {
       toast(`Error: ${e.message}`, "err");

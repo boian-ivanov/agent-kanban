@@ -1094,6 +1094,75 @@ input.field--error {
   box-shadow: 0 0 0 2px var(--card-bg) inset;
 }
 
+/* ============ Agent output (SSE log viewer) ============ */
+
+.agent-output {
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg-2);
+  display: block;
+}
+
+.agent-output summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.agent-output summary::-webkit-details-marker {
+  color: var(--muted);
+}
+
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  display: inline-block;
+  transition: background 0.3s;
+}
+
+.agent-dot--live {
+  background: #22c55e;
+  animation: pulse-dot 1.5s infinite;
+}
+
+.agent-dot--done {
+  background: #64748b;
+}
+
+.agent-dot--error {
+  background: #ef4444;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.agent-logs {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+  background: var(--card-bg);
+  max-height: 400px;
+  overflow-y: auto;
+  border-top: 1px solid var(--card-line);
+}
+
 /* ============ Links list ============ */
 
 .links {

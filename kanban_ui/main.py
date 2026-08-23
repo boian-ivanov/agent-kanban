@@ -21,6 +21,7 @@ Endpoints (v2):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -149,6 +150,7 @@ class TaskCreate(BaseModel):
     priority: str = "normal"
     size: str = "M"
     external_blocker: str | None = None
+    assignee: str | None = None
     links: list[dict[str, str]] = Field(default_factory=list)
     project_id: str = DEFAULT_PROJECT_ID
 
@@ -160,6 +162,7 @@ class TaskUpdate(BaseModel):
     priority: str | None = None
     size: str | None = None
     external_blocker: str | None = None
+    assignee: str | None = None
 
 
 class MoveRequest(BaseModel):
@@ -170,6 +173,10 @@ class MoveRequest(BaseModel):
 
 class CommentRequest(BaseModel):
     text: str
+
+
+class AssignRequest(BaseModel):
+    assignee: str | None = None
 
 
 class LinkRequest(BaseModel):
@@ -188,6 +195,7 @@ class ProjectCreate(BaseModel):
     icon: str = ""
     sort_order: int | None = None
     path: str | None = None
+    model: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -196,6 +204,7 @@ class ProjectUpdate(BaseModel):
     icon: str | None = None
     sort_order: int | None = None
     path: str | None = None
+    model: str | None = None
 
 
 class ProjectArchiveRequest(BaseModel):
@@ -222,14 +231,22 @@ class SourceGitRequest(BaseModel):
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+def index() -> HTMLResponse:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/p/{project_id}", response_class=HTMLResponse)
-def index_for_project(project_id: str) -> str:
+def index_for_project(project_id: str) -> HTMLResponse:
     """SPA-style: same HTML, the frontend reads project_id from location.pathname."""
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +323,7 @@ def create_project(req: ProjectCreate) -> dict[str, Any]:
         icon=req.icon,
         sort_order=req.sort_order,
         path=_normalize_path(req.path),
+        model=req.model or None,
     )
     return p.to_public()
 
@@ -319,8 +337,9 @@ def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
             color=req.color,
             icon=req.icon,
             sort_order=req.sort_order,
-            # an empty string clears path in the database
+            # an empty string clears path/model in the database
             path=_normalize_path(req.path) if req.path != "" else "",
+            model=req.model or "",
         )
     except KeyError:
         raise HTTPException(404, f"project {project_id} not found")
@@ -602,6 +621,7 @@ async def create_task(req: TaskCreate) -> dict[str, Any]:
         priority=req.priority,
         size=req.size,
         external_blocker=req.external_blocker,
+        assignee=req.assignee,
         actor=_actor(),
         links=req.links or None,
         project_id=req.project_id,
@@ -626,6 +646,8 @@ async def update_task(task_id: str, req: TaskUpdate) -> dict[str, Any]:
             size=req.size,
             external_blocker=req.external_blocker,
         )
+        if "assignee" in req.model_fields_set and t.assignee != req.assignee:
+            t = _store.assign_task(task_id, req.assignee, actor=_actor())
     except KeyError:
         raise HTTPException(404, f"task {task_id} not found")
     changed = [
@@ -633,6 +655,7 @@ async def update_task(task_id: str, req: TaskUpdate) -> dict[str, Any]:
             ("title", req.title), ("description", req.description),
             ("acceptance", req.acceptance), ("priority", req.priority),
             ("size", req.size), ("external_blocker", req.external_blocker),
+            ("assignee", req.assignee),
         ) if v is not None
     ]
     await emit_event("task_updated", {
@@ -672,6 +695,25 @@ async def move_task(task_id: str, req: MoveRequest) -> dict[str, Any]:
     return t.to_public()
 
 
+@app.post("/api/tasks/{task_id}/assign")
+async def assign_task(task_id: str, req: AssignRequest) -> dict[str, Any]:
+    pre = _store.get_task(task_id)
+    if pre is None:
+        raise HTTPException(404, f"task {task_id} not found")
+    if pre.assignee == req.assignee:
+        return pre.to_public()
+    try:
+        t = _store.assign_task(task_id, req.assignee, actor=_actor())
+    except KeyError:
+        raise HTTPException(404, f"task {task_id} not found")
+    await emit_event("task_updated", {
+        "task": t.to_public(),
+        "project": _project_payload(t.project_id),
+        "changed_fields": ["assignee"],
+    })
+    return t.to_public()
+
+
 @app.post("/api/tasks/{task_id}/comment", status_code=201)
 async def add_comment(task_id: str, req: CommentRequest) -> dict[str, Any]:
     try:
@@ -700,6 +742,58 @@ def add_link(task_id: str, req: LinkRequest) -> dict[str, Any]:
 def set_blockers(task_id: str, req: BlockersRequest) -> dict[str, Any]:
     _store.set_blockers(task_id, req.blocker_ids)
     return {"ok": True, "blockers": req.blocker_ids}
+
+
+# ---------------------------------------------------------------------------
+# Agent log streaming (SSE)
+# ---------------------------------------------------------------------------
+
+AGENT_LOG_DIR = KANBAN_DATA / "agent-logs"
+AGENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/api/tasks/{task_id}/log/stream")
+async def stream_task_log(task_id: str):
+    """SSE endpoint: streams the agent log file for a task.
+
+    Sends existing content immediately, then polls for new lines every 500ms.
+    Closes when the log file is deleted (agent cleanup) or the client disconnects.
+    """
+    log_file = AGENT_LOG_DIR / f"{task_id}.log"
+
+    async def event_generator():
+        last_size = 0
+
+        # Send any existing content first
+        if log_file.exists():
+            try:
+                content = log_file.read_text(encoding="utf-8", errors="replace")
+                if content:
+                    last_size = len(content.encode("utf-8"))
+                    yield f"data: {json.dumps({'lines': content})}\n\n"
+            except OSError:
+                pass
+
+        # Poll for new content
+        while True:
+            await asyncio.sleep(0.5)
+            if not log_file.exists():
+                yield f"data: {json.dumps({'done': True})}\n\n"
+                return
+            try:
+                current_size = log_file.stat().st_size
+                if current_size > last_size:
+                    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(last_size)
+                        new_content = f.read()
+                        if new_content:
+                            last_size = f.tell()
+                            yield f"data: {json.dumps({'lines': new_content})}\n\n"
+            except OSError:
+                yield f"data: {json.dumps({'done': True})}\n\n"
+                return
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------

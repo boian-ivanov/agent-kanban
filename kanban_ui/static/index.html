@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Cinzel:wght@500;600;700&family=Marcellus&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=2026-05-09-en1" />
+  <link rel="stylesheet" href="/static/styles.css?v=2026-08-17-p2" />
   <script>
     // Apply saved theme and profile before body parses — no flash of wrong styles.
     // Also accept ?theme=light|dark and ?profile=standard|cyberpunk|horizon
@@ -158,6 +158,13 @@
           <label>History</label>
           <div class="history" id="m-history"></div>
         </div>
+        <details class="agent-output" id="m-agent-output" hidden>
+          <summary>
+            <span>Agent output</span>
+            <span class="agent-dot" id="m-agent-dot"></span>
+          </summary>
+          <pre class="agent-logs" id="m-agent-logs"><span class="muted">Waiting for output…</span></pre>
+        </details>
         <div class="field">
           <label>Add comment</label>
           <div class="comment-add">
@@ -253,7 +260,12 @@
             <input type="text" id="p-path" placeholder="not selected" autocomplete="off" />
             <button class="btn btn--ghost" type="button" data-action="pick-folder" id="btn-pick-folder" title="Pick in Finder">Choose…</button>
           </div>
-          <span class="field__hint">Optional. Path to the Claude Code project on disk.</span>
+          <span class="field__hint">Optional. Path to the project on disk.</span>
+        </div>
+        <div class="field">
+          <label>Model override</label>
+          <input type="text" id="p-model" placeholder="e.g. deepinfra/deepseek-v4-flash" autocomplete="off" />
+          <span class="field__hint">Optional. Overrides the role-level model from <code>agents.json</code>. Set the provider + model name for <code>omp --model</code>.</span>
         </div>
         <div class="field">
           <label>Color</label>
@@ -332,6 +344,6 @@
   <div class="toast" id="toast" hidden></div>
 
   <script src="/static/vendor/Sortable.min.js"></script>
-  <script src="/static/app.js?v=2026-05-09-en1"></script>
+  <script src="/static/app.js?v=2026-08-17-p2"></script>
 </body>
 </html>

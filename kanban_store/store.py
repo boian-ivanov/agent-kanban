@@ -112,6 +112,7 @@ class Project:
     archived: bool
     created_at: str
     path: str | None = None
+    model: str | None = None
     task_counts: dict[str, int] = field(default_factory=dict)
     total_tasks: int = 0
 
@@ -159,6 +160,18 @@ class Store:
             self._migrate_v2()
             self._migrate_v3()
             self._migrate_v4()
+            self._migrate_v5()
+
+    def _migrate_v5(self) -> None:
+        """v4 → v5: projects.model TEXT (omp model override)."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()}
+        if "model" not in cols:
+            self._conn.execute("ALTER TABLE projects ADD COLUMN model TEXT")
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        if row and int(row["value"]) < 5:
+            self._conn.execute("UPDATE meta SET value='5' WHERE key='schema_version'")
 
     def _migrate_v4(self) -> None:
         """v3 → v4: project_sources table (created via schema.sql,
@@ -644,6 +657,7 @@ class Store:
         icon: str = "",
         sort_order: int | None = None,
         path: str | None = None,
+        model: str | None = None,
     ) -> Project:
         ts = _now()
         with self._lock:
@@ -656,9 +670,9 @@ class Store:
                     sort_order = (r["m"] + 1) if r else 0
                 self._conn.execute(
                     """INSERT INTO projects
-                       (id, name, color, icon, sort_order, archived, path, created_at)
-                       VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
-                    (project_id, name, color, icon or name[:1].upper(), sort_order, path, ts),
+                       (id, name, color, icon, sort_order, archived, path, model, created_at)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+                    (project_id, name, color, icon or name[:1].upper(), sort_order, path, model, ts),
                 )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -677,18 +691,21 @@ class Store:
         icon: str | None = None,
         sort_order: int | None = None,
         path: str | None = None,
+        model: str | None = None,
     ) -> Project:
         sets: list[str] = []
         params: list[Any] = []
         # path is forwarded as-is (None means "leave alone", "" means "clear").
         for col, val in (
             ("name", name), ("color", color), ("icon", icon),
-            ("sort_order", sort_order), ("path", path),
+            ("sort_order", sort_order), ("path", path), ("model", model),
         ):
             if val is not None:
                 sets.append(f"{col} = ?")
                 # an empty string for path becomes NULL in the database
-                params.append(None if (col == "path" and val == "") else val)
+                # Empty string clears nullable columns (path, model) to NULL.
+                # Other fields (name, color, icon) have NOT NULL — keep "" as-is.
+                params.append(None if val == "" and col in ("path", "model") else val)
         if not sets:
             p = self.get_project(project_id)
             if p is None:
@@ -778,6 +795,7 @@ class Store:
             archived=bool(row["archived"]),
             created_at=row["created_at"],
             path=row["path"] if "path" in row.keys() else None,
+            model=row["model"] if "model" in row.keys() else None,
         )
 
     # ------------------------------------------------------------------
