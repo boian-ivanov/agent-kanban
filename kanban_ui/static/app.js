@@ -284,7 +284,7 @@ function cardEl(t) {
     <div class="card__row">
       <span class="card__id">${t.id}</span>
       ${t.priority === "high" ? `<span class="chip chip--prio-high">HIGH</span>` : ""}
-      <span class="chip chip--size-${t.size}">${t.size}</span>
+      ${t.size ? `<span class="chip chip--size-${t.size}">${t.size}</span>` : ""}
       ${t.assignee ? `<span class="chip chip--assignee">${escapeHTML(t.assignee)}</span>` : ""}
     </div>
     <div class="card__title">${escapeHTML(t.title)}</div>
@@ -537,6 +537,7 @@ async function openTaskModal(taskId) {
   $("#m-title").value = t.title || "";
   $("#m-priority").value = t.priority || "normal";
   $("#m-size").value = t.size || "M";
+  $("#m-size-field").hidden = t.kind === "epic";
   $("#m-assignee").value = t.assignee || "";
   $("#m-description").value = t.description || "";
   $("#m-acceptance").value = t.acceptance || "";
@@ -715,7 +716,7 @@ async function saveModal() {
     description: $("#m-description").value,
     acceptance: $("#m-acceptance").value,
     priority: $("#m-priority").value,
-    size: $("#m-size").value,
+    size: $("#modal").dataset.kind === "epic" ? "" : $("#m-size").value,
     external_blocker: $("#m-blocker").value.trim() || null,
     assignee: $("#m-assignee").value.trim() || null,
   };
@@ -808,6 +809,7 @@ function openNewModal(opts = {}) {
   $("#n-kind").disabled = Boolean(parentId);
   populateParentSelect(kind, parentId);
   $("#n-parent-field").hidden = kind === "epic" || Boolean(parentId);
+  $("#n-size-field").hidden = kind === "epic";
   $("#new-modal").dataset.parentId = parentId;
   $("#new-modal").hidden = false;
   $("#n-title").focus();
@@ -818,6 +820,7 @@ function closeNewModal() {
   delete $("#new-modal").dataset.parentId;
   $("#n-kind").disabled = false;
   $("#n-parent-field").hidden = false;
+  $("#n-size-field").hidden = false;
 }
 
 async function createTask() {
@@ -826,15 +829,16 @@ async function createTask() {
     toast("Title is required", "err");
     return;
   }
+  const kind = $("#n-kind").value;
   const payload = {
     title,
     description: $("#n-description").value,
     acceptance: $("#n-acceptance").value,
     priority: $("#n-priority").value,
-    size: $("#n-size").value,
+    size: kind === "epic" ? "" : $("#n-size").value,
     status: $("#n-status").value,
     project_id: state.projectId,
-    kind: $("#n-kind").value,
+    kind,
     parent_id: $("#new-modal").dataset.parentId || $("#n-parent").value || null,
   };
   try {
@@ -1404,6 +1408,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const kind = $("#n-kind").value;
     populateParentSelect(kind, "");
     $("#n-parent-field").hidden = kind === "epic";
+    $("#n-size-field").hidden = kind === "epic";
   });
   $("#btn-new").addEventListener("click", () => openNewModal());
   $("#btn-create").addEventListener("click", createTask);
