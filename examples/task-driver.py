@@ -34,13 +34,19 @@ Flow:
      Comments starting with ``@agent`` also steer (board rules engine
      forwards them to this socket); the driver additionally polls
      GET /api/tasks/{id}?since_seq every 5s as a fallback so steering keeps
-     working when the rule path is unavailable,
-  6. enforce per-task budgets (T-312): max_tokens (default 30M, D5),
-     max_duration (default 60 min), a no-progress watchdog (<1KB agent-log
-     growth per 5 min while alive = churn) and dot-only output detection
-     (T-284 500M-token incident). On breach: kill the session, comment
-     evidence (elapsed, tokens, log bytes — same as orchestrator.py
-     --progress) and move the task back to approved,
+  6. enforce per-task budgets (T-312/AK-003): max_tokens (default 30M, D5),
+     max_duration (default 60 min), a no-progress watchdog (fires only when
+     a silent window ALSO burned tokens hard, or the session is verifiably
+     dead — silent + low-token + alive is healthy research, never killed;
+     the token bar scales with the window: 400K tokens/min of silent burn,
+     above this model's observed 100-230K/min research rate) and dot-only
+     output detection (T-284 500M-token incident). Before any
+     interrupt/move/comment on a budget breach, stop or steer, the driver
+     re-verifies it still owns the run row (pid == os.getpid()); a
+     non-owner logs 'not owner, exiting' and never touches the board. On
+     breach: kill the session, comment evidence (elapsed, tokens, log
+     bytes, real aliveness — same as orchestrator.py --progress) and move
+     the task back to approved,
   7. mark the run done/failed/stopped in task_runs and exit. A run is
      finished when a turn completes and the task has left in_progress
      (the agent's normal final move is to testing).
@@ -100,6 +106,22 @@ DEFAULT_MAX_TOKENS = 30_000_000  # 30M tokens per task run
 DEFAULT_MAX_DURATION_S = 3600  # 60 min per task run
 NO_PROGRESS_WINDOW_S = 300  # no-progress check window (5 min)
 NO_PROGRESS_MIN_GROWTH = 1024  # <1KB agent-log growth in window = churn
+# The threshold scales with the watchdog window: healthy research burns
+# 100-230K tokens/min on this stack (2026-08-24 evidence: 520K/962K/1.15M/
+# 1.09M in 5-min windows, all WORKING sessions killed), so a fixed 1M/5min
+# default sat right at the model's normal burn. 400K/min = 1.7x the worst
+# observed healthy rate; a silent window that burns more than that is churn.
+NO_PROGRESS_TOKEN_CLIMB_PER_MIN = 400_000
+NO_PROGRESS_TOKEN_CLIMB = NO_PROGRESS_TOKEN_CLIMB_PER_MIN * 5  # 5-min window
+
+
+def _token_climb_for_window(window_s: int) -> int:
+    """AK-003: token-burn bar for a given watchdog window, scaled from the
+    per-minute research rate so a longer window (launcher: 1800s) does not
+    turn normal silent research into a false positive."""
+    return max(NO_PROGRESS_TOKEN_CLIMB_PER_MIN * window_s // 60, 1)
+
+
 DOT_RUN_BYTES = 1024  # 1024 consecutive dot chars = dot-only churn (T-284)
 WATCH_TICK_S = 1.0  # budget watchdog tick
 
@@ -413,6 +435,15 @@ def main() -> int:
         help="minimum agent-log byte growth per window; less while alive = churn",
     )
     parser.add_argument(
+        "--watchdog-token-climb",
+        type=int,
+        default=None,
+        help="no-progress: tokens that must be burned in a silent window for "
+        "it to count as churn (0 = silence alone breaches; default scales "
+        "with the window: 400K tokens/min of silent burn, e.g. 2M for the "
+        "300s window)",
+    )
+    parser.add_argument(
         "--mode",
         choices=("work", "verify"),
         default="work",
@@ -474,6 +505,11 @@ def main() -> int:
     )
     watchdog_window = args.watchdog_window
     watchdog_min_growth = args.watchdog_min_growth
+    watchdog_token_climb = (
+        args.watchdog_token_climb
+        if args.watchdog_token_climb is not None
+        else _token_climb_for_window(watchdog_window)
+    )
 
     board = (
         api_json(args.base_url, "GET", f"/api/board?project={args.project_id}").get(
@@ -540,6 +576,25 @@ def main() -> int:
                 return 3
             time.sleep(2)
     else:
+        # AK-003: refuse to claim when another live driver already owns the
+        # task (a running run row with a live pid). A stale row (dead pid)
+        # does not block dispatch — same rule as the verify-mode guard.
+        try:
+            run = (
+                api_json(
+                    args.base_url, "GET", f"/api/tasks/{args.task_id}/runs"
+                ).get("run")
+                or {}
+            )
+        except ApiError as e:
+            log_line(f"claim guard check failed: {e}")
+            run = {}
+        if run.get("status") == "running" and _pid_alive(run.get("pid")):
+            log_line(
+                f"not claiming: task owned by live run pid={run.get('pid')} "
+                f"port={run.get('control_port')}"
+            )
+            return 2
         try:
             api_json(
                 args.base_url,
@@ -580,6 +635,30 @@ def main() -> int:
         "breach": None,
     }
     control.set_budget(budget_state)
+
+    def owns_run() -> bool:
+        """AK-003: true when the registered task_runs row still belongs to
+        this driver process (pid match, or our control port is registered).
+        Re-fetched from the board before any interrupt/move/comment — a
+        driver must never act on another driver's session."""
+        try:
+            run = (
+                api_json(
+                    args.base_url, "GET", f"/api/tasks/{args.task_id}/runs"
+                ).get("run")
+                or {}
+            )
+        except ApiError as e:
+            log_line(f"ownership check failed: {e}")
+            return False
+        if run.get("pid") == os.getpid():
+            return True
+        if run.get("control_port") == control.port:
+            return True
+        log_line(
+            f"run row owned by pid={run.get('pid')} port={run.get('control_port')}"
+        )
+        return False
 
     # --- task context bundle (T-313): task fields + ancestors + comments +
     # constraints in one call — replaces the hardcoded protocol text below.
@@ -732,30 +811,36 @@ def main() -> int:
     last_poll = 0.0
     stop_request: dict[str, Any] | None = None
 
-    def handle_steer(text: str, comment_id: int | None) -> None:
+    def handle_steer(text: str, comment_id: int | None) -> bool:
         """Act on control-socket / polled steer text. A stop directive sets
         stop_request (the main loop interrupts the session); a plain steer
-        is injected as a follow-up user turn."""
+        is injected as a follow-up user turn. Returns False when this driver
+        no longer owns the run — the caller must exit without acting."""
         nonlocal stop_request
+        if not owns_run():
+            log_line("not owner, exiting (steer for a run owned by another driver)")
+            return False
         if comment_id is not None:
             if comment_id in steered_ids:
-                return
+                return True
             steered_ids.add(comment_id)
         parsed = classify_steer(text)
         if parsed is None:
-            return
+            return True
         kind, to_status, payload = parsed
         if kind == "stop":
             stop_request = {"reason": payload, "to_status": to_status}
             log_line(f"stop requested: {payload}")
-            return
+            return True
         # steer — queue as the next turn; record what the agent sees
         send({"type": "prompt", "message": payload, "mode": "followUp"})
         log_line(f"steer injected: {payload[:120]}")
         write_chat("user", payload)
+        return True
 
-    def poll_comments() -> None:
-        """Fallback steering: new comments since last_seq (5s poll)."""
+    def poll_comments() -> bool:
+        """Fallback steering: new comments since last_seq (5s poll).
+        Returns False when steering hit a run we no longer own."""
         nonlocal last_seq
         try:
             fresh = api_json(
@@ -765,10 +850,10 @@ def main() -> int:
             )
         except ApiError as e:
             log_line(f"comment poll failed: {e}")
-            return
+            return True
         history = fresh.get("history") or []
         if not history:
-            return
+            return True
         last_seq = max(last_seq, max(h.get("id") or 0 for h in history))
         for h in history:
             if h.get("action") != "comment":
@@ -779,16 +864,18 @@ def main() -> int:
                 continue
             if classify_steer(text) is not None:
                 log_line(f"poll: steering comment #{cid}")
-                handle_steer(text, cid)
+                if not handle_steer(text, cid):
+                    return False
+        return True
 
     run_status = "failed"
     budget_breach: str | None = None
     tokens_used = 0
     t0 = time.monotonic()
     dot_run = 0
-    prev_log_bytes = log_path.stat().st_size if log_path.exists() else 0
-    last_watch = t0
-    last_progress_check = t0
+    last_check_tokens = 0
+    not_owner = False
+    breach_alive = False
     try:
         ready = read_line(timeout=15)
         if not ready or not ready.strip():
@@ -816,21 +903,44 @@ def main() -> int:
                         budget_state["elapsed_s"] = elapsed_s
                         if max_duration_s and elapsed_s >= max_duration_s:
                             budget_breach = "max_duration"
-                        elif (
-                            now - last_progress_check >= watchdog_window
-                            and proc.poll() is None
-                        ):
+                        elif now - last_progress_check >= watchdog_window:
+                            # AK-003: a silent window is only churn when it
+                            # ALSO burned tokens hard, or the session is
+                            # verifiably dead (os.kill — not proc.poll(),
+                            # which lies for reaped/respawned children).
+                            # Silent + low-token + alive = healthy research.
                             cur_bytes = (
                                 log_path.stat().st_size if log_path.exists() else 0
                             )
                             budget_state["log_bytes"] = cur_bytes
-                            if cur_bytes - prev_log_bytes < watchdog_min_growth:
+                            tokens_in_window = tokens_used - last_check_tokens
+                            alive = _pid_alive(proc.pid)
+                            budget_state["alive"] = alive
+                            if (
+                                cur_bytes - prev_log_bytes < watchdog_min_growth
+                                and (
+                                    tokens_in_window >= watchdog_token_climb
+                                    or not alive
+                                )
+                            ):
                                 budget_breach = "no_progress"
                             prev_log_bytes = cur_bytes
+                            last_check_tokens = tokens_used
                             last_progress_check = now
                 if budget_breach is not None:
+                    # AK-003: never interrupt/move/comment a run we do not
+                    # own — another driver may have overwritten our row.
+                    if not owns_run():
+                        log_line(
+                            "not owner, exiting (budget breach on a run "
+                            "owned by another driver)"
+                        )
+                        not_owner = True
+                        break
                     log_line(f"budget breach: {budget_breach}")
+                    breach_alive = _pid_alive(proc.pid)
                     budget_state["breach"] = budget_breach
+                    budget_state["alive"] = breach_alive
                     _interrupt(proc)
                     run_status = "stopped"
                     break
@@ -839,6 +949,13 @@ def main() -> int:
                 if stop_request is None:
                     stop_request = control.get_stop_request()
                 if stop_request is not None:
+                    if not owns_run():
+                        log_line(
+                            "not owner, exiting (stop for a run owned by "
+                            "another driver)"
+                        )
+                        not_owner = True
+                        break
                     _interrupt(proc)
                     run_status = "stopped"
                     break
@@ -846,7 +963,9 @@ def main() -> int:
                 # 2. queued steers (control socket)
                 steer = control.next_steer()
                 if steer is not None:
-                    handle_steer(steer[0], steer[1])
+                    if not handle_steer(steer[0], steer[1]):
+                        not_owner = True
+                        break
                     continue
 
                 # 3. events
@@ -855,7 +974,9 @@ def main() -> int:
                     now = time.monotonic()
                     if now - last_poll >= POLL_INTERVAL:
                         last_poll = now
-                        poll_comments()
+                        if not poll_comments():
+                            not_owner = True
+                            break
                     continue
                 if not line.strip():
                     # EOF: omp closed stdout without agent_end — failure
@@ -943,6 +1064,12 @@ def main() -> int:
                 proc.kill()
                 proc.wait()
 
+    # --- AK-003: a driver that lost ownership never touches the board:
+    # no comment, no move, no run-row update. ---
+    if not_owner:
+        control.close()
+        return 4
+
     # --- budget breach bookkeeping: comment evidence, move back to approved ---
     if budget_breach is not None:
         elapsed_min = (time.monotonic() - t0) / 60
@@ -954,10 +1081,11 @@ def main() -> int:
         except ApiError:
             pass
         budget_state["breach"] = budget_breach
+        budget_state["alive"] = breach_alive
         evidence = (
             f"[progress] {args.task_id} status={status} "
             f"elapsed={elapsed_min:.0f}m tokens={tokens_used}/{max_tokens} "
-            f"log={log_bytes}B alive=false"
+            f"log={log_bytes}B alive={'true' if breach_alive else 'false'}"
         )
         text = (
             f"Budget breach ({budget_breach}): {evidence} — killed session, "
