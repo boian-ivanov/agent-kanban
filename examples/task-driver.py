@@ -45,8 +45,19 @@ Flow:
      finished when a turn completes and the task has left in_progress
      (the agent's normal final move is to testing).
 
+``--mode verify`` (T-314) runs the verification agent instead: the task
+arrives in testing, there is no claim (it stays in testing while the
+verifier works), the role is fixed to ``verification``, and before
+registering its run the driver waits for any live implementer run to
+clear (guard: never dispatch a verifier while an agent process still
+owns the task; bounded by --guard-timeout, then skip with a comment).
+A verify run finishes when the task leaves testing (PASS -> done,
+FAIL -> approved, blocked only for human intervention — all moves made
+by the verifier agent itself).
+
 Usage:
   task-driver.py --task-id T-310 --project-id agent-kanban [--base-url URL]
+  task-driver.py --task-id T-314 --project-id agent-kanban --mode verify
 """
 
 from __future__ import annotations
@@ -79,6 +90,9 @@ OMP_BIN = os.environ.get("OMP_BIN", "omp")
 POLL_INTERVAL = 5.0
 # How long to wait after SIGINT before escalating to SIGTERM/SIGKILL.
 SIGINT_GRACE = 10.0
+# T-314: verify mode waits this long for a live implementer run to clear
+# before skipping dispatch (guard: live agent process still owns the task).
+VERIFY_GUARD_TIMEOUT_S = 60
 # T-312 watchdog budgets (D5-locked trial values; tune per role via
 # agents.json or per run via CLI flags):
 DEFAULT_MAX_TOKENS = 30_000_000  # 30M tokens per task run
@@ -340,6 +354,23 @@ def _interrupt(proc: subprocess.Popen) -> None:
         proc.wait()
 
 
+def _pid_alive(pid: Any) -> bool:
+    """True when pid is a live process on this host (None/foreign -> False).
+
+    Used by the verify-mode guard (T-314): a task_runs row with
+    status=running only counts as "still owned" while its process is alive.
+    """
+    if not isinstance(pid, int):
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="per-task agent driver")
     parser.add_argument("--task-id", required=True)
@@ -370,6 +401,20 @@ def main() -> int:
         default=NO_PROGRESS_MIN_GROWTH,
         help="minimum agent-log byte growth per window; less while alive = churn",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("work", "verify"),
+        default="work",
+        help="work: claim + implement (default); verify: verification agent "
+        "on a task that arrived in testing (T-314)",
+    )
+    parser.add_argument(
+        "--guard-timeout",
+        type=int,
+        default=VERIFY_GUARD_TIMEOUT_S,
+        help="verify mode: max seconds to wait for a live implementer run to "
+        "clear before skipping dispatch",
+    )
     args = parser.parse_args()
 
     AGENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -386,8 +431,13 @@ def main() -> int:
 
     # --- task + role resolution (same rules as the old launcher) ---
     task = api_json(args.base_url, "GET", f"/api/tasks/{args.task_id}")
-    assignee = task.get("assignee") or ""
-    role = assignee[len("agent:") :] if assignee.startswith("agent:") else "default"
+    if args.mode == "verify":
+        # T-314: the verifier role is fixed (agents.json 'verification' —
+        # the task's assignee is still the implementer's agent:xxx).
+        role = "verification"
+    else:
+        assignee = task.get("assignee") or ""
+        role = assignee[len("agent:") :] if assignee.startswith("agent:") else "default"
 
     agents = json.loads(Path(args.agents_json).read_text(encoding="utf-8"))
     cfg = agents.get(role) or agents.get("default") or {}
@@ -431,17 +481,64 @@ def main() -> int:
         f"model={model} worktree={worktree}"
     )
 
-    # --- claim (atomic: assignee=agent:<role> + approved -> in_progress) ---
-    try:
-        api_json(
-            args.base_url,
-            "POST",
-            f"/api/tasks/{args.task_id}/claim",
-            {"assignee": f"agent:{role}"},
-        )
-    except ApiError as e:
-        log_line(f"claim failed: {e}")
-        return 2
+    if args.mode == "verify":
+        # --- verification flow (T-314): task arrived in testing, no claim.
+        # The task stays in testing while the verifier works; it is moved by
+        # the verifier agent itself (PASS -> done, FAIL -> approved).
+        # Guard: never dispatch while a live agent process still owns the
+        # task — the implementer's driver marks its run done a beat after
+        # the move that triggered this dispatch, so wait a bounded grace
+        # period for the run to clear; skip with a comment when it stays
+        # live (stuck implementer).
+        if task.get("status") != "testing":
+            log_line(
+                f"verify aborted: task is in '{task.get('status')}', "
+                "expected 'testing'"
+            )
+            return 3
+        guard_deadline = time.monotonic() + args.guard_timeout
+        while True:
+            try:
+                run = api_json(
+                    args.base_url,
+                    "GET",
+                    f"/api/tasks/{args.task_id}/runs",
+                ).get("run") or {}
+            except ApiError as e:
+                log_line(f"run guard check failed: {e}")
+                run = {}
+            live = run.get("status") == "running" and _pid_alive(run.get("pid"))
+            if not live:
+                break
+            if time.monotonic() >= guard_deadline:
+                text = (
+                    f"Verification skipped: agent process still owns this "
+                    f"task (run pid={run.get('pid')} status=running) after "
+                    f"{args.guard_timeout}s of waiting."
+                )
+                log_line(text)
+                try:
+                    api_json(
+                        args.base_url,
+                        "POST",
+                        f"/api/tasks/{args.task_id}/comment",
+                        {"text": text},
+                    )
+                except ApiError as e:
+                    log_line(f"guard skip comment failed: {e}")
+                return 3
+            time.sleep(2)
+    else:
+        try:
+            api_json(
+                args.base_url,
+                "POST",
+                f"/api/tasks/{args.task_id}/claim",
+                {"assignee": f"agent:{role}"},
+            )
+        except ApiError as e:
+            log_line(f"claim failed: {e}")
+            return 2
 
     # --- control socket + task_runs registration ---
     control = ControlServer(
@@ -488,24 +585,63 @@ def main() -> int:
         if context.get("constraints"):
             constraints = "\n".join(f"- {c}" for c in context["constraints"])
 
-    prompt_text = (
-        f"You are a kanban worker agent dispatched by the local agent-kanban "
-        f"board (project {args.project_id}). Task: {args.task_id} (role: {role}).\n\n"
-        f"{role_prompt}\n\n"
-        f"Task context (from GET /api/tasks/{args.task_id}/context):\n"
-        f"{context_text}\n\n"
-        f"Constraints:\n{constraints}\n\n"
-        f"Board protocol:\n"
-        f"1. Do the work described in the task context in the current directory.\n"
-        f"2. Post a summary comment: curl -s -X POST "
-        f"{args.base_url}/api/tasks/{args.task_id}/comment "
-        f"-H 'Content-Type: application/json' -d '{{\"text\":\"<summary>\"}}'\n"
-        f"3. Move the task to testing: curl -s -X POST "
-        f"{args.base_url}/api/tasks/{args.task_id}/move "
-        f"-H 'Content-Type: application/json' -d '{{\"to_status\":\"testing\"}}'\n\n"
-        f"The task context above defines the actual work; the API calls are the "
-        f"board protocol. Reply with a brief summary of what you did."
-    )
+    if args.mode == "verify":
+        prompt_text = (
+            f"You are the verification agent dispatched by the local "
+            f"agent-kanban board (project {args.project_id}). Task: "
+            f"{args.task_id} (role: verification). The implementer just moved "
+            f"it to testing; verify it now.\n\n"
+            f"{role_prompt}\n\n"
+            f"Task context (from GET /api/tasks/{args.task_id}/context):\n"
+            f"{context_text}\n\n"
+            f"Constraints:\n{constraints}\n\n"
+            f"Board protocol (verification):\n"
+            f"1. Read the task's description and acceptance criteria.\n"
+            f"2. Run the repo gate, then smoke-test where feasible:\n"
+            f"   - salon-platform: `bun run format` (oxfmt write mode) then\n"
+            f"     `bun check`; both must exit 0. Note in your evidence\n"
+            f"     whether format modified any files.\n"
+            f"   - any other project: the repo's own check/build/test\n"
+            f"     entrypoint (scripts in package.json/Makefile/README); if\n"
+            f"     none, run a syntax/compile check and the test suite.\n"
+            f"   - smoke: run the changed surface (app/CLI/script) and\n"
+            f"     exercise the changed path.\n"
+            f"3. Post your verdict with exact evidence (commands run, exit\n"
+            f"   codes, relevant output): curl -s -X POST "
+            f"{args.base_url}/api/tasks/{args.task_id}/comment "
+            f"-H 'Content-Type: application/json' "
+            f"-d '{{\"text\":\"<verdict+evidence>\"}}'\n"
+            f"4. Move the task: PASS -> done, FAIL -> approved (auto-retriggers "
+            f"the fix run), blocked only when human intervention is required: "
+            f"curl -s -X POST {args.base_url}/api/tasks/{args.task_id}/move "
+            f"-H 'Content-Type: application/json' "
+            f"-d '{{\"to_status\":\"done|approved|blocked\"}}'\n"
+            f"5. Do NOT edit code to fix a failure, and NEVER commit or push\n"
+            f"   (D1-lock): leave the working tree modified for the board\n"
+            f"   owner.\n"
+            f"The task context above defines what to verify; the API calls "
+            f"are the board protocol. Reply with a brief summary of your "
+            f"verdict."
+        )
+    else:
+        prompt_text = (
+            f"You are a kanban worker agent dispatched by the local agent-kanban "
+            f"board (project {args.project_id}). Task: {args.task_id} (role: {role}).\n\n"
+            f"{role_prompt}\n\n"
+            f"Task context (from GET /api/tasks/{args.task_id}/context):\n"
+            f"{context_text}\n\n"
+            f"Constraints:\n{constraints}\n\n"
+            f"Board protocol:\n"
+            f"1. Do the work described in the task context in the current directory.\n"
+            f"2. Post a summary comment: curl -s -X POST "
+            f"{args.base_url}/api/tasks/{args.task_id}/comment "
+            f"-H 'Content-Type: application/json' -d '{{\"text\":\"<summary>\"}}'\n"
+            f"3. Move the task to testing: curl -s -X POST "
+            f"{args.base_url}/api/tasks/{args.task_id}/move "
+            f"-H 'Content-Type: application/json' -d '{{\"to_status\":\"testing\"}}'\n\n"
+            f"The task context above defines the actual work; the API calls are the "
+            f"board protocol. Reply with a brief summary of what you did."
+        )
 
     # --- run the omp session (--mode rpc: JSON-line protocol on stdin/stdout) ---
     proc = subprocess.Popen(
@@ -743,13 +879,18 @@ def main() -> int:
                     sys.stdout.write("\n")
                     sys.stdout.flush()
                     # turn done — natural completion: the agent moves the
-                    # task out of in_progress when finished. Stay alive
-                    # otherwise (steers/stops may still arrive).
+                    # task out of its working status when finished (work:
+                    # in_progress -> testing; verify: testing -> done/
+                    # approved/blocked). Stay alive otherwise (steers/stops
+                    # may still arrive).
                     try:
                         fresh = api_json(
                             args.base_url, "GET", f"/api/tasks/{args.task_id}"
                         )
-                        if fresh.get("status") != "in_progress":
+                        working_status = (
+                            "testing" if args.mode == "verify" else "in_progress"
+                        )
+                        if fresh.get("status") != working_status:
                             run_status = "done"
                             done = True
                     except ApiError as e:

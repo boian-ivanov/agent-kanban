@@ -264,6 +264,76 @@ def test_emit_task_commented_steers_or_logs(tmp_path):
     assert any("no live agent run" in e["error"] for e in rules._status["last_errors"])
 
 
+def test_emit_task_moved_applies_rule_once(tmp_path):
+    """T-314 regression: a task_moved event must fire each matching rule
+    exactly once. The pre-fix emit_rule_event had a duplicated loop that
+    dispatched every matching rule twice (double agent spawn)."""
+    store = Store(tmp_path / "t.db")
+    t = store.create_task("Verifiable")
+    rules_file = tmp_path / "rules.json"
+    rules_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "note-testing",
+                        "trigger": {
+                            "type": "task_moved",
+                            "to_status": "testing",
+                            "from_status": "in_progress",
+                            "project_id": "default",
+                        },
+                        "action": {"type": "add_comment", "comment": "arrived"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules.RuleEngine(store, rules_file)
+    payload = {
+        "task": t.to_public(),
+        "project": None,
+        "from_status": "in_progress",
+        "to_status": "testing",
+    }
+    rules.emit_rule_event("task_moved", payload)
+    applied = [
+        a
+        for a in rules._status["last_reactive"]
+        if a.get("event") == "task_moved" and a.get("task_id") == t.id
+    ]
+    assert len(applied) == 1, f"rule applied {len(applied)} times: {applied}"
+    assert applied[0]["action"] == "comment: arrived"
+    # the rule also honors from_status: a different source status does not fire
+    payload["from_status"] = "approved"
+    rules.emit_rule_event("task_moved", payload)
+    assert len(
+        [a for a in rules._status["last_reactive"] if a.get("task_id") == t.id]
+    ) == 1
+
+
+def test_live_rules_json_loads_verifier_rules():
+    """T-314: the board's rules.json validates and the per-project verifier
+    rules are present with the from_status=in_progress filter (a verifier
+    must not be dispatched for, e.g., a manual move straight to testing)."""
+    rules_file = REPO_ROOT / "kanban_data" / "rules.json"
+    rules_list, errs = rules._load_rules(rules_file)
+    assert errs == [], f"rules.json errors: {errs}"
+    verifier = [
+        r
+        for r in rules_list
+        if r.get("name", "").startswith("Verify tasks arriving in testing")
+    ]
+    assert len(verifier) == 3
+    for r in verifier:
+        assert r["trigger"]["type"] == "task_moved"
+        assert r["trigger"]["to_status"] == "testing"
+        assert r["trigger"]["from_status"] == "in_progress"
+        assert r["action"]["type"] == "run_command"
+        assert "launch-verifier.sh" in r["action"]["cmd"]
+
+
 # ---------------------------------------------------------------------------
 # Driver: classify_steer + ControlServer
 # ---------------------------------------------------------------------------

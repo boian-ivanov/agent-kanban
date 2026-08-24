@@ -435,63 +435,6 @@ def emit_rule_event(event: str, payload: dict[str, Any]) -> None:
                 },
             )
             _status["last_errors"] = _status["last_errors"][:10]
-    if _engine is None:
-        return
-    _engine._maybe_reload()
-    rules = _engine._rules
-    task = payload.get("task") or {}
-    task_id = task.get("id")
-    if not task_id:
-        return
-    for rule in rules:
-        trig = rule["trigger"]
-        if trig["type"] != event:
-            continue
-        if event == "task_moved":
-            if trig.get("to_status") and trig["to_status"] != payload.get("to_status"):
-                continue
-            if trig.get("from_status") and trig["from_status"] != payload.get(
-                "from_status"
-            ):
-                continue
-            if trig.get("project_id") and trig["project_id"] != task.get("project_id"):
-                continue
-            if rule.get("project_id") and rule["project_id"] != task.get("project_id"):
-                continue
-            ctx = {
-                "task_id": task_id,
-                "title": task.get("title", ""),
-                "project_id": task.get("project_id", ""),
-                "from_status": payload.get("from_status", ""),
-                "to_status": payload.get("to_status", ""),
-            }
-            try:
-                desc = _apply_action(_engine.store, task_id, rule["action"], ctx)
-                _status["last_reactive"].insert(
-                    0,
-                    {
-                        "ts": _now().isoformat(timespec="seconds"),
-                        "rule": rule.get("name", "?"),
-                        "event": event,
-                        "task_id": task_id,
-                        "action": desc,
-                    },
-                )
-                _status["last_reactive"] = _status["last_reactive"][:20]
-                log.info(
-                    "reactive rule '%s' on %s: %s", rule.get("name", "?"), task_id, desc
-                )
-            except Exception as e:
-                log.exception("reactive rule '%s' failed", rule.get("name", "?"))
-                _status["last_errors"].insert(
-                    0,
-                    {
-                        "ts": _now().isoformat(timespec="seconds"),
-                        "rule": rule.get("name", "?"),
-                        "error": f"{task_id}: {e}",
-                    },
-                )
-                _status["last_errors"] = _status["last_errors"][:10]
 
 
 class RuleEngine:
