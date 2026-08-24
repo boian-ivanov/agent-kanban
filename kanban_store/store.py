@@ -463,6 +463,41 @@ class Store:
             row, eager_links=True, eager_history=True, eager_tree=True
         )
 
+    def get_descendants(self, task_id: str) -> list[Task]:
+        """Every descendant of ``task_id`` (recursive children), project-scoped.
+
+        One project-wide query, then an in-memory walk — the board hierarchy
+        is shallow (epic → story → task) but this stays correct for deeper
+        trees. Per-level order follows (status, column_order, id).
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT project_id FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if not row:
+                return []
+            rows = self._conn.execute(
+                "SELECT * FROM tasks WHERE project_id = ? AND id != ?"
+                " ORDER BY status, column_order, id",
+                (row["project_id"], task_id),
+            ).fetchall()
+        by_parent: dict[str | None, list[Task]] = {}
+        for r in rows:
+            t = self._row_to_task(r, eager_links=True)
+            by_parent.setdefault(t.parent_id, []).append(t)
+        out: list[Task] = []
+        seen: set[str] = set()
+        queue: list[str] = [task_id]
+        while queue:
+            pid = queue.pop(0)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            for t in by_parent.get(pid, []):
+                out.append(t)
+                queue.append(t.id)
+        return out
+
     def get_history_since(self, task_id: str, since_seq: int) -> list[TaskHistory]:
         """History rows with id > since_seq, ascending — for the agent
         driver's comment poll (GET /api/tasks/{id}?since_seq=N)."""

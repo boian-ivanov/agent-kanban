@@ -579,6 +579,121 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/context:
+    get:
+      summary: Task Context
+      description: 'Agent context bundle for a task — everything a dispatched agent
+        needs
+
+        in one call (T-313): task fields, the ancestor chain (epic description,
+
+        story acceptance), recent comments, and the shared agent constraints.
+
+        The per-task driver injects this into the omp prompt.'
+      operationId: task_context_api_tasks__task_id__context_get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Task Context Api Tasks  Task Id  Context Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/children:
+    get:
+      summary: Task Children
+      description: 'Direct children of a task in one call (AK-011).
+
+
+        ``include=full`` returns complete child cards (description, acceptance,
+
+        parent chain, comments) — a scoping agent sees every planned child
+
+        without N+1 fetches. Default summary uses the same shape as /api/tasks.'
+      operationId: task_children_api_tasks__task_id__children_get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      - name: include
+        in: query
+        required: false
+        schema:
+          type: string
+          description: summary|full — full returns the complete card payload
+          default: summary
+          title: Include
+        description: summary|full — full returns the complete card payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Task Children Api Tasks  Task Id  Children Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/subtree:
+    get:
+      summary: Task Subtree
+      description: 'Recursive descendant tree — epic → stories → tickets (AK-011).
+
+
+        Full fields (description, acceptance, kind, status, size, assignee,
+
+        parent_id, blockers) plus nested ``children`` per node in one call, for
+
+        a scoping agent decomposing an epic. Sibling order follows
+
+        (status, column_order, id). History/comments/ancestors are omitted —
+
+        the tree itself conveys ancestry.'
+      operationId: task_subtree_api_tasks__task_id__subtree_get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Task Subtree Api Tasks  Task Id  Subtree Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/tasks/{task_id}/move:
     post:
       summary: Move Task
@@ -1238,6 +1353,15 @@ components:
           title: Code
           description: ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); None =
             legacy T-### ids
+        constraints:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Constraints
+          description: per-project agent constraint strings (the project's repo gate);
+            None = legacy boards / no project-specific gate
       type: object
       required:
       - id
@@ -1282,6 +1406,16 @@ components:
           title: Code
           description: ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); None leaves
             it unchanged, "" clears back to legacy T-### ids
+        constraints:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Constraints
+          description: per-project agent constraint strings; None leaves it unchanged,
+            [] clears back to no project gate (driver falls back to the generic repo-gate
+            instruction)
       type: object
       title: ProjectUpdate
     RunRequest:
@@ -1402,6 +1536,19 @@ components:
           type: string
           title: Project Id
           default: default
+        parent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parent Id
+          description: 'parent task id — hierarchy: epic → story → task (child kind
+            is derived from the parent''s kind)'
+        kind:
+          type: string
+          title: Kind
+          description: task|story|epic — top-level kinds only; a parent forces the
+            matching child kind
+          default: task
       type: object
       required:
       - title

@@ -121,18 +121,21 @@ commit & push, close, and dispatch the next card.
 The hierarchy exists so agents get the FULL context of their ticket. Flows:
 
 - **Upward (automatic)**: the driver fetches `GET /api/tasks/{id}/context`
-  before every run and injects the bundle into the prompt — task fields,
-  ancestor chain (epic description, story acceptance), recent comments,
-  constraints. Older boards: 404 fallback to plain task fetch. Agents should
-  NOT re-fetch context; it is already in their prompt.
+  before every run and injects the bundle — task fields, ancestor chain,
+  recent comments, a `children` summary (id/title/status/size — the story's
+  planned tickets), constraints. Older boards: 404 fallback to plain task
+  fetch. Agents should NOT re-fetch context; it is already in their prompt.
 - **Downward (children)**: `GET /api/tasks/{id}/children?include=full` —
-  full child cards in one call (a story's tickets, an epic's stories).
-  `GET /api/tasks/{id}/subtree` — the complete descendant tree (epic →
-  stories → tickets) for scoping. *(AK-011 pending: children/subtree
-  endpoints + children summary in /context — until they land, use
-  `GET /api/tasks?parent_id=<id>` summary + per-task fetches.)*
+  full child cards in one call (description/acceptance/parent chain/comments;
+  a story's tickets, an epic's stories). Summary default (`include=summary`)
+  matches the `/api/tasks` card shape.
+  `GET /api/tasks/{id}/subtree` — the complete recursive descendant tree
+  (epic → stories → tickets) with full fields and nested `children`, one
+  call, no N+1. Sibling order follows (status, column_order, id).
 - **Scoping flow (D3)**: an epic/story assigned `agent:scoping` is dispatched
-  on `approved`; the scoping agent reviews the subtree, creates child
+  on `approved`; the scoping agent first fetches the whole descendant tree
+  with `GET /api/tasks/{id}/subtree` (descriptions + acceptance of every
+  child in one call), reviews it against the codebase, creates child
   stories/tickets (`parent_id` + description + acceptance, S/M only, never
   `status:approved`), comments a summary, moves the epic/story to `uat` for
   user review. Analysis-only — no code changes.

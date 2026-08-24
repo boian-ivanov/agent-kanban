@@ -9,8 +9,9 @@ Endpoints (v2):
     POST   /api/projects              — create a project
     PATCH  /api/projects/{id}         — update (name/color/icon/sort_order/path/model/code/constraints)
     POST   /api/projects/{id}/archive — archive (toggle)
-    GET    /api/tasks?project=&status=&assignee=&parent_id=&updated_since=  — filtered task list
-    GET    /api/tasks/{task_id}       — full card with history
+    GET    /api/tasks/{task_id}/context — agent context bundle (task + ancestors + comments + children summary + constraints)
+    GET    /api/tasks/{task_id}/children?include=  — direct children (summary|full cards)
+    GET    /api/tasks/{task_id}/subtree — recursive descendant tree (epic → stories → tickets)
     POST   /api/tasks                 — create (project_id in payload)
     PATCH  /api/tasks/{task_id}       — update fields
     POST   /api/tasks/{task_id}/claim — atomic claim (assignee + approved→in_progress)
@@ -38,7 +39,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from kanban_store import Store, STATUSES, status_meta
+from kanban_store import Store, Task, STATUSES, status_meta
 from kanban_store.store import DEFAULT_PROJECT_ID
 from kanban_ui.agent_control import ControlUnavailable, control_request
 from kanban_ui.automation import (
@@ -707,6 +708,25 @@ def archive_project(project_id: str, req: ProjectArchiveRequest) -> dict[str, An
 # ---------------------------------------------------------------------------
 
 
+def _task_summary(t: Task) -> dict[str, Any]:
+    """Compact summary card — shared by /api/tasks and /children (summary)."""
+    return {
+        "id": t.id,
+        "title": t.title,
+        "status": t.status,
+        "priority": t.priority,
+        "size": t.size,
+        "assignee": t.assignee,
+        "external_blocker": t.external_blocker,
+        "blockers": t.blockers,
+        "parent_id": t.parent_id,
+        "kind": t.kind,
+        "moved_at": t.moved_at,
+        "created_at": t.created_at,
+        "project_id": t.project_id,
+    }
+
+
 @app.get("/api/tasks")
 def list_tasks_api(
     project: str | None = Query(None, description="project_id filter"),
@@ -731,24 +751,7 @@ def list_tasks_api(
         updated_since=updated_since,
     )
     return {
-        "tasks": [
-            {
-                "id": t.id,
-                "title": t.title,
-                "status": t.status,
-                "priority": t.priority,
-                "size": t.size,
-                "assignee": t.assignee,
-                "external_blocker": t.external_blocker,
-                "blockers": t.blockers,
-                "parent_id": t.parent_id,
-                "kind": t.kind,
-                "moved_at": t.moved_at,
-                "created_at": t.created_at,
-                "project_id": t.project_id,
-            }
-            for t in tasks
-        ],
+        "tasks": [_task_summary(t) for t in tasks],
         "count": len(tasks),
     }
 
@@ -822,8 +825,83 @@ def task_context(task_id: str) -> dict[str, Any]:
         },
         "ancestors": t.ancestors,
         "comments": comments[-20:],
+        "children": [
+            {"id": c.id, "title": c.title, "status": c.status, "size": c.size}
+            for c in _store.list_tasks(parent_id=t.id)
+        ],
         "constraints": _agents_constraints(),
     }
+
+
+@app.get("/api/tasks/{task_id}/children")
+def task_children(
+    task_id: str,
+    include: str = Query(
+        "summary",
+        description="summary|full — full returns the complete card payload",
+    ),
+) -> dict[str, Any]:
+    """Direct children of a task in one call (AK-011).
+
+    ``include=full`` returns complete child cards (description, acceptance,
+    parent chain, comments) — a scoping agent sees every planned child
+    without N+1 fetches. Default summary uses the same shape as /api/tasks.
+    """
+    if not _store.get_task(task_id):
+        raise HTTPException(404, f"task {task_id} not found")
+    full = include == "full"
+    children = _store.list_tasks(
+        parent_id=task_id, eager_history=full, eager_tree=full
+    )
+    return {
+        "task_id": task_id,
+        "count": len(children),
+        "children": [c.to_public() if full else _task_summary(c) for c in children],
+    }
+
+
+@app.get("/api/tasks/{task_id}/subtree")
+def task_subtree(task_id: str) -> dict[str, Any]:
+    """Recursive descendant tree — epic → stories → tickets (AK-011).
+
+    Full fields (description, acceptance, kind, status, size, assignee,
+    parent_id, blockers) plus nested ``children`` per node in one call, for
+    a scoping agent decomposing an epic. Sibling order follows
+    (status, column_order, id). History/comments/ancestors are omitted —
+    the tree itself conveys ancestry.
+    """
+    if not _store.get_task(task_id):
+        raise HTTPException(404, f"task {task_id} not found")
+    descendants = _store.get_descendants(task_id)
+    by_parent: dict[str | None, list[Task]] = {}
+    for d in descendants:
+        by_parent.setdefault(d.parent_id, []).append(d)
+
+    def _node(parent_key: str | None) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for d in by_parent.get(parent_key, []):
+            node = {
+                "id": d.id,
+                "title": d.title,
+                "status": d.status,
+                "priority": d.priority,
+                "size": d.size,
+                "assignee": d.assignee,
+                "external_blocker": d.external_blocker,
+                "blockers": d.blockers,
+                "parent_id": d.parent_id,
+                "kind": d.kind,
+                "moved_at": d.moved_at,
+                "created_at": d.created_at,
+                "project_id": d.project_id,
+                "description": d.description,
+                "acceptance": d.acceptance,
+                "children": _node(d.id),
+            }
+            out.append(node)
+        return out
+
+    return {"task_id": task_id, "tree": _node(task_id)}
 
 
 def _project_payload(project_id: str | None) -> dict[str, Any] | None:

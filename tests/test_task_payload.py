@@ -272,3 +272,85 @@ def test_task_context_endpoint(api):
     assert isinstance(body["constraints"], list) and body["constraints"]
     # unknown task
     assert client.get("/api/tasks/T-999/context").status_code == 404
+
+def test_task_context_children_summary(api):
+    """AK-011: /context carries a children summary (id/title/status/size) so
+    a story's implementer sees its planned tickets in the injected bundle."""
+    client, store = api
+    epic = store.create_task("Epic", kind="epic")
+    story = store.create_task("Story", kind="story", parent_id=epic.id)
+    t1 = store.create_task("Ticket A", size="S", kind="task", parent_id=story.id)
+    t2 = store.create_task("Ticket B", size="M", kind="task", parent_id=story.id)
+
+    kids = {k["id"]: k for k in client.get(f"/api/tasks/{story.id}/context").json()["children"]}
+    assert set(kids) == {t1.id, t2.id}
+    assert kids[t1.id] == {"id": t1.id, "title": "Ticket A", "status": "backlog", "size": "S"}
+    assert kids[t2.id] == {"id": t2.id, "title": "Ticket B", "status": "backlog", "size": "M"}
+    # a leaf has no children
+    assert client.get(f"/api/tasks/{t1.id}/context").json()["children"] == []
+
+
+def test_children_endpoint_summary_and_full(api):
+    """AK-011: GET /api/tasks/{id}/children returns direct children in one
+    call — summary by default, complete cards (description/acceptance/parent
+    chain) with include=full; no N+1 needed."""
+    client, store = api
+    epic = store.create_task("Epic", description="epic desc", acceptance="epic acc", kind="epic")
+    story = store.create_task("Story", description="story desc", kind="story", parent_id=epic.id)
+    store.create_task("Ticket", description="ticket desc", kind="task", parent_id=story.id)
+
+    # summary: same shape as /api/tasks, no description/acceptance
+    r = client.get(f"/api/tasks/{epic.id}/children")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["task_id"] == epic.id
+    assert body["count"] == 1
+    child = body["children"][0]
+    assert child["id"] == story.id and child["kind"] == "story"
+    assert "description" not in child and "acceptance" not in child
+
+    # full: complete cards with description/acceptance/parent chain
+    r = client.get(f"/api/tasks/{epic.id}/children?include=full")
+    assert r.status_code == 200
+    child = r.json()["children"][0]
+    assert child["description"] == "story desc"
+    assert child["parent_id"] == epic.id
+    assert [a["id"] for a in child["ancestors"]] == [epic.id]
+    assert child["ancestors"][0]["acceptance"] == "epic acc"
+
+    # unknown task
+    assert client.get("/api/tasks/T-999/children").status_code == 404
+
+
+def test_subtree_endpoint(api):
+    """AK-011: GET /api/tasks/{id}/subtree returns the complete recursive
+    descendant tree with full fields — epic → story → ticket, one call."""
+    client, store = api
+    epic = store.create_task("Epic", description="epic desc", acceptance="epic acc", kind="epic")
+    story = store.create_task("Story", description="story desc", kind="story", parent_id=epic.id)
+    ticket = store.create_task(
+        "Ticket", description="ticket desc", acceptance="ticket acc",
+        kind="task", parent_id=story.id,
+    )
+
+    r = client.get(f"/api/tasks/{epic.id}/subtree")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["task_id"] == epic.id
+    assert len(body["tree"]) == 1
+    s = body["tree"][0]
+    assert s["id"] == story.id and s["kind"] == "story"
+    assert s["description"] == "story desc"
+    assert s["parent_id"] == epic.id
+    assert len(s["children"]) == 1
+    tk = s["children"][0]
+    assert tk["id"] == ticket.id and tk["kind"] == "task"
+    assert tk["description"] == "ticket desc"
+    assert tk["acceptance"] == "ticket acc"
+    # leaf: empty children, no history/comments/ancestors noise
+    assert tk["children"] == []
+    assert "history" not in tk and "ancestors" not in tk
+    # a leaf's subtree is empty
+    assert client.get(f"/api/tasks/{ticket.id}/subtree").json()["tree"] == []
+    # unknown task
+    assert client.get("/api/tasks/T-999/subtree").status_code == 404
