@@ -545,17 +545,25 @@ async function openTaskModal(taskId) {
   renderHistory(t.history);
   $("#m-comment").value = "";
 
-  // Agent log streaming: only for live statuses
+  // Agent output: bound to RUN state, not status (AK-001). Live SSE stream
+  // only while task_runs.status=running with a live control port; finished
+  // runs render the persisted chat read-only (fetched once); no run and no
+  // messages -> box hidden.
   const agentEl = $("#m-agent-output");
   const logEl = $("#m-agent-logs");
   const dotEl = $("#m-agent-dot");
   // Close any previous stream
   if (agentLogSource) { agentLogSource.close(); agentLogSource = null; }
-  if (t.status === "in_progress" || t.status === "testing" || t.status === "analyst") {
+  let run = null;
+  try {
+    run = (await api("GET", `/api/tasks/${t.id}/runs`)).run || null;
+  } catch (_) {}
+  if (run && run.status === "running" && run.control_port) {
     agentEl.hidden = false;
     agentEl.open = true;
     logEl.innerHTML = "";
     dotEl.className = "agent-dot agent-dot--live";
+    let logStarted = false;  // skip leading blank lines until first content
     agentLogSource = new EventSource(`/api/tasks/${t.id}/log/stream`);
     agentLogSource.onmessage = (e) => {
       try {
@@ -570,7 +578,14 @@ async function openTaskModal(taskId) {
           // Append new lines, remove the placeholder
           const placeholder = logEl.querySelector(".muted");
           if (placeholder) placeholder.remove();
-          logEl.appendChild(document.createTextNode(data.lines));
+          let text = data.lines;
+          if (!logStarted) {
+            // the model often emits a leading "\n" as the first text_delta
+            text = text.replace(/^\s+/, "");
+            if (!text) return;  // all-whitespace chunk — keep waiting
+            logStarted = true;
+          }
+          logEl.appendChild(document.createTextNode(text));
           logEl.scrollTop = logEl.scrollHeight;
         }
       } catch (_) {}
@@ -581,11 +596,40 @@ async function openTaskModal(taskId) {
       agentLogSource = null;
     };
   } else {
-    agentEl.hidden = true;
-    dotEl.className = "agent-dot";
+    // Not live: render persisted chat once, read-only (hide when empty)
+    let messages = [];
+    try {
+      messages = (await api("GET", `/api/tasks/${t.id}/chat`)).messages || [];
+    } catch (_) {}
+    if (messages.length) {
+      agentEl.hidden = false;
+      agentEl.open = true;
+      logEl.innerHTML = "";
+      dotEl.className = "agent-dot agent-dot--done";
+      renderPersistedChat(logEl, messages);
+      logEl.scrollTop = logEl.scrollHeight;
+    } else {
+      agentEl.hidden = true;
+      logEl.innerHTML = "";
+      dotEl.className = "agent-dot";
+    }
   }
 
   $("#modal").hidden = false;
+}
+
+// Read-only rendering of a task's persisted chat (AK-001) — used instead of
+// the live SSE stream when the agent run has ended. Content is trimmed: the
+// driver persists full messages whose text often begins with a model-emitted
+// leading newline.
+function renderPersistedChat(logEl, messages) {
+  for (const m of messages) {
+    const role = document.createElement("span");
+    role.className = "chat-role";
+    role.textContent = (m.role || "agent").trim();
+    logEl.appendChild(role);
+    logEl.appendChild(document.createTextNode("\n" + (m.content || "").trim() + "\n\n"));
+  }
 }
 
 function renderBreadcrumb(t) {

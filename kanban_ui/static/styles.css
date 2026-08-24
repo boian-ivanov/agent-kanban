@@ -1241,6 +1241,10 @@ input.field--error {
   overflow-y: auto;
   border-top: 1px solid var(--card-line);
 }
+.chat-role {
+  color: var(--muted);
+  font-weight: 600;
+}
 
 /* ============ Links list ============ */
 
