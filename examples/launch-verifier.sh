@@ -19,6 +19,7 @@ mkdir -p "$(dirname "$LOG")"
 DRIVER="/Users/boian.ivanov/Projects/agent-kanban/examples/task-driver.py"
 {
   echo "[$(date -u +%FT%TZ)] spawning verifier for $TASK_ID ($PROJECT_ID)"
-  python3 "$DRIVER" --task-id "$TASK_ID" --project-id "$PROJECT_ID" --mode verify
+  python3 "$DRIVER" --task-id "$TASK_ID" --project-id "$PROJECT_ID" --mode verify \
+    --watchdog-window 1800 --watchdog-min-growth 128
 } >>"$LOG" 2>&1 &
 exit 0
