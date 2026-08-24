@@ -827,6 +827,14 @@ button { font: inherit; }
 
 .modal__head .btn--icon { margin-left: auto; }
 
+.modal__body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 /* Hierarchy breadcrumb (epic › story › task) in the task modal */
 .breadcrumb {
   display: flex;
