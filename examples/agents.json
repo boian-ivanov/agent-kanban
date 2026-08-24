@@ -2,12 +2,15 @@
   "constraints": [
     "Do NOT run git commit or push. The board owner commits changes; leave the working tree modified for human review.",
     "BEFORE moving the task to testing, the working tree MUST pass the full repo gate: run `bun run format` (oxfmt write mode) so every changed file is formatted, then `bun check` and confirm it exits 0 (svelte-check, vitest+coverage, fallow dupes/health). If `bun check` fails, fix the findings first. Unformatted or red-tree work will be bounced back.",
-    "Do not leave background dev servers, watchers, or build processes running when you finish (stop servers you started; note any pre-existing ones in your summary)."
+    "Do not leave background dev servers, watchers, or build processes running when you finish (stop servers you started; note any pre-existing ones in your summary).",
+    "NEVER run destructive commands or delete files outside your own change set: no `git clean`, `git reset --hard`, `git restore .`, `git checkout -- .`, `rm`, or moving files to trash. Untracked files (CLAUDE.md, PLAN.md, other agents' uncommitted work) are NOT yours — the board keeps a persistent shared worktree between runs. Use `git status`/`git diff` to inspect and `git checkout -- <file>` ONLY to revert a file you yourself changed in this run. (T-312 incident 2026-08-24: an agent's restore wiped its own work and the project's CLAUDE.md/PLAN.md.)"
   ],
   "default": {
     "model": "opencode-go/deepseek-v4-flash",
     "worktree": "/Users/boian.ivanov/Projects/nameri.me",
-    "prompt": "You are a general software engineer working on the project in the current directory. Do the work described in the task, following its acceptance criteria. Keep changes minimal and verify what you did (build, test, or inspect as appropriate)."
+    "prompt": "You are a general software engineer working on the project in the current directory. Do the work described in the task, following its acceptance criteria. Keep changes minimal and verify what you did (build, test, or inspect as appropriate).",
+    "max_tokens": 30000000,
+    "max_duration": 3600
   },
   "fe": {
     "model": "opencode-go/deepseek-v4-flash",
