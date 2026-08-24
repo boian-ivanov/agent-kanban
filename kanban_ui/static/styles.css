@@ -795,6 +795,7 @@ button { font: inherit; }
   position: relative;
   width: min(680px, 92vw);
   max-height: 88vh;
+  z-index: 1;
   background: var(--card-bg);
   color: var(--text);
   border-radius: 12px;
