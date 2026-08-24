@@ -174,7 +174,9 @@ class Store:
 
     def __init__(self, db_path: str | Path | None = None):
         if db_path is None:
-            db_path = Path(__file__).resolve().parent.parent / "tasks.db"
+            db_path = os.environ.get("KANBAN_DB") or (
+                Path(__file__).resolve().parent.parent / "tasks.db"
+            )
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
