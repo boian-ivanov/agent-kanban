@@ -52,6 +52,15 @@ concurrent styles.css ticket).
   not `bun check` (pure Python repo).
 - The verifier (T-314) auto-checks cards landing in `testing`; acceptance
   criteria should be verifiable by an agent (commands + observable state).
+  Verifier cleanup is ownership-scoped (only processes it spawned — exact
+  pid/port; never `pkill` by pattern or kill by port; the live board on 7777
+  or the retry's process may own it — 3 incidents 2026-08-24).
+- The work agent's protocol (REST + stdio MCP parity): atomic claim
+  `POST /api/tasks/{id}/claim` (approved → in_progress), DB chat
+  `GET/POST /api/tasks/{id}/chat`, control `POST /api/tasks/{id}/agent/stop|
+  steer`, context `GET /api/tasks/{id}/context`, scoping
+  `children?include=full` + `subtree`. Cards with a parent/kind are
+  hierarchical (epic → story → task).
 - Design decisions → Obsidian vault note first (`Agent Kanban — Redesign
   Plan.md` holds the roadmap + locked decisions D1–D6), then tickets.
 - Full board protocol lives in `skill://kanban-pipeline`.

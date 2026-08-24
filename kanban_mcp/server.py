@@ -18,14 +18,22 @@ The same setup works for Cline (Settings → MCP Servers → Add).
 
 Tools (actor = "claude" by default, overridable via parameter):
 
-* ``kanban_list``    — list tasks (filter by status / assignee)
+* ``kanban_list``    — list tasks (filter by status / assignee / project / parent / updated_since)
 * ``kanban_get``     — full card with history
+* ``kanban_context`` — agent context bundle (task + ancestors + comments + children + constraints)
+* ``kanban_children``— direct children (summary or full cards)
+* ``kanban_subtree`` — recursive descendant tree (epic → stories → tickets)
 * ``kanban_pull``    — atomically "claim a task" (approved → analyst, assignee=claude)
+* ``kanban_claim``   — atomically claim approved → in_progress (assignee=agent:<role>)
 * ``kanban_move``    — move a task to a new status
 * ``kanban_comment`` — comment in history
-* ``kanban_create``  — new card
+* ``kanban_chat`` / ``kanban_send_chat`` — read / append the persisted agent chat
+* ``kanban_run`` / ``kanban_register_run`` — read / upsert the task_runs row
+* ``kanban_stop`` / ``kanban_steer`` — stop or steer the task's live agent driver
+* ``kanban_create``  — new card (supports parent_id / kind hierarchy)
 * ``kanban_link``    — add a link (memory / file / pr / url)
 * ``kanban_columns`` — column descriptions (so the agent gets oriented)
+* ``kanban_projects`` / ``kanban_board`` / ``kanban_search`` / ``kanban_my_active`` / ``kanban_update`` / ``kanban_blockers``
 
 On failure a human-readable message is returned; the MCP layer does not crash.
 """
@@ -33,13 +41,14 @@ from __future__ import annotations
 
 import json
 import os
-import sys
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from kanban_store import Store, STATUSES, status_meta
+from kanban_store import STATUSES, Store, status_meta
 from kanban_store.store import DEFAULT_PROJECT_ID
+from kanban_ui.agent_control import ControlUnavailable, control_request
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +90,7 @@ def kanban_columns() -> dict[str, Any]:
 
 
 def _short_task(t: Any) -> dict[str, Any]:
+    """Summary card — same shape as the REST /api/tasks payload."""
     return {
         "id": t.id,
         "title": t.title,
@@ -89,8 +99,11 @@ def _short_task(t: Any) -> dict[str, Any]:
         "size": t.size,
         "assignee": t.assignee,
         "external_blocker": t.external_blocker,
-        "moved_at": t.moved_at,
         "blockers": t.blockers,
+        "parent_id": t.parent_id,
+        "kind": t.kind,
+        "moved_at": t.moved_at,
+        "created_at": t.created_at,
         "project_id": t.project_id,
     }
 
@@ -100,21 +113,30 @@ def kanban_list(
     status: str | None = None,
     assignee: str | None = None,
     project_id: str | None = None,
+    parent_id: str | None = None,
+    updated_since: str | None = None,
 ) -> dict[str, Any]:
-    """List tasks with optional filters.
+    """List tasks with optional filters (parity with GET /api/tasks).
 
     Args:
         status: one of backlog/approved/analyst/in_progress/testing/uat/done/blocked/cancelled,
                 or None for all.
         assignee: claude / agent:<name> / user, or None for all.
         project_id: project slug (see kanban_projects); None = all projects.
+        parent_id: only direct children of this task (hierarchy: epic → story → task).
+        updated_since: ISO8601 — only tasks with a history entry at or after
+                this timestamp (create/move/comment/assign/update).
 
     Returns:
-        {"ok": true, "data": {"tasks": [{...short fields}], "count": N}}
+        {"ok": true, "data": {"tasks": [{...summary fields}], "count": N}}
     """
     try:
         tasks = _get_store().list_tasks(
-            status=status, assignee=assignee, project_id=project_id,
+            status=status,
+            assignee=assignee,
+            project_id=project_id,
+            parent_id=parent_id,
+            updated_since=updated_since,
         )
     except Exception as e:
         return _err(str(e))
@@ -313,6 +335,8 @@ def kanban_create(
     external_blocker: str | None = None,
     actor: str = "claude",
     project_id: str | None = None,
+    parent_id: str | None = None,
+    kind: str = "task",
 ) -> dict[str, Any]:
     """Create a new card. Defaults to Backlog; for immediate work pass status='in_progress'.
 
@@ -324,6 +348,10 @@ def kanban_create(
         size: S (<30 min) / M (<2 h) / L (>2 h).
         project_id: project slug; None = default (see KANBAN_DEFAULT_PROJECT_ID
                     or KANBAN_PROJECT_ID env).
+        parent_id: parent task id — hierarchy epic → story → task; the child
+                    kind is derived from the parent (a story child is a task).
+        kind: task | story | epic — top-level kinds only; ignored when a
+                    parent_id forces the matching child kind.
     """
     if status not in STATUSES:
         return _err(f"unknown status: {status}")
@@ -339,6 +367,8 @@ def kanban_create(
             external_blocker=external_blocker,
             actor=actor,
             project_id=pid,
+            parent_id=parent_id,
+            kind=kind,
         )
     except Exception as e:
         return _err(str(e))
@@ -400,6 +430,324 @@ def kanban_update(
     except Exception as e:
         return _err(str(e))
     return _ok(t.to_public())
+
+
+# ---------------------------------------------------------------------------
+# Agent context protocol + live-run control (parity with the REST API)
+# ---------------------------------------------------------------------------
+
+
+def _constraints() -> list[str]:
+    """Shared agent constraints from examples/agents.json (same file the
+    task-driver reads for role config). Missing/unreadable -> [].
+    """
+    try:
+        data = json.loads(
+            (Path(__file__).resolve().parent.parent / "examples" / "agents.json")
+            .read_text(encoding="utf-8")
+        )
+        return list(data.get("constraints") or [])
+    except (OSError, ValueError):
+        return []
+
+
+@mcp.tool()
+def kanban_context(task_id: str) -> dict[str, Any]:
+    """Agent context bundle for a task — parity with GET /api/tasks/{id}/context.
+
+    One call gives a dispatched agent everything: task fields, the ancestor
+    chain (epic description, story acceptance), the 20 most recent comments,
+    a children summary, and the shared agent constraints from agents.json.
+    """
+    try:
+        t = _get_store().get_task(task_id)
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    if not t:
+        return _err(f"task {task_id} not found")
+    comments = [
+        {"id": h.id, "ts": h.ts, "actor": h.actor, "text": h.comment}
+        for h in t.history
+        if h.action == "comment"
+    ]
+    return _ok({
+        "task_id": t.id,
+        "project_id": t.project_id,
+        "task": {
+            "id": t.id,
+            "title": t.title,
+            "status": t.status,
+            "priority": t.priority,
+            "size": t.size,
+            "assignee": t.assignee,
+            "kind": t.kind,
+            "parent_id": t.parent_id,
+            "description": t.description,
+            "acceptance": t.acceptance,
+            "external_blocker": t.external_blocker,
+            "created_at": t.created_at,
+            "moved_at": t.moved_at,
+        },
+        "ancestors": t.ancestors,
+        "comments": comments[-20:],
+        "children": [
+            {"id": c.id, "title": c.title, "status": c.status, "size": c.size}
+            for c in _get_store().list_tasks(parent_id=t.id)
+        ],
+        "constraints": _constraints(),
+    })
+
+
+@mcp.tool()
+def kanban_children(task_id: str, include: str = "summary") -> dict[str, Any]:
+    """Direct children of a task — parity with GET /api/tasks/{id}/children.
+
+    Args:
+        task_id: parent task id.
+        include: "summary" (default, same card shape as /api/tasks) or
+                 "full" (complete child cards: description, acceptance,
+                 parent chain, comments) — a scoping agent sees every
+                 planned child without N+1 fetches.
+
+    Returns:
+        {"ok": true, "data": {"task_id": ..., "count": N, "children": [...]}}
+    """
+    if include not in ("summary", "full"):
+        return _err("include must be 'summary' or 'full'")
+    store = _get_store()
+    try:
+        if not store.get_task(task_id):
+            return _err(f"task {task_id} not found")
+        full = include == "full"
+        children = store.list_tasks(
+            parent_id=task_id, eager_history=full, eager_tree=full
+        )
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok({
+        "task_id": task_id,
+        "count": len(children),
+        "children": [c.to_public() if full else _short_task(c) for c in children],
+    })
+
+
+@mcp.tool()
+def kanban_subtree(task_id: str) -> dict[str, Any]:
+    """Recursive descendant tree — parity with GET /api/tasks/{id}/subtree.
+
+    Epic → stories → tickets with full fields (description, acceptance,
+    kind, status, size, assignee, parent_id, blockers) plus nested
+    ``children`` per node in one call, no N+1. Sibling order follows
+    (status, column_order, id). Use this first when scoping an epic.
+    """
+    store = _get_store()
+    try:
+        if not store.get_task(task_id):
+            return _err(f"task {task_id} not found")
+        descendants = store.get_descendants(task_id)
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    by_parent: dict[str | None, list[Any]] = {}
+    for d in descendants:
+        by_parent.setdefault(d.parent_id, []).append(d)
+
+    def _node(parent_key: str | None) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for d in by_parent.get(parent_key, []):
+            node = {
+                "id": d.id,
+                "title": d.title,
+                "status": d.status,
+                "priority": d.priority,
+                "size": d.size,
+                "assignee": d.assignee,
+                "external_blocker": d.external_blocker,
+                "blockers": d.blockers,
+                "parent_id": d.parent_id,
+                "kind": d.kind,
+                "moved_at": d.moved_at,
+                "created_at": d.created_at,
+                "project_id": d.project_id,
+                "description": d.description,
+                "acceptance": d.acceptance,
+                "children": _node(d.id),
+            }
+            out.append(node)
+        return out
+
+    return _ok({"task_id": task_id, "tree": _node(task_id)})
+
+
+@mcp.tool()
+def kanban_claim(task_id: str, assignee: str) -> dict[str, Any]:
+    """Atomically claim a task — parity with POST /api/tasks/{id}/claim.
+
+    Sets assignee=agent:<role> and moves approved → in_progress in one
+    history-recorded transaction. Idempotent for a re-claim by the same
+    assignee; errors when the task is owned by someone else or not in
+    approved/in_progress. Use this (not kanban_pull) for the driver claim.
+    """
+    if not assignee.strip():
+        return _err("assignee required")
+    try:
+        t = _get_store().claim_task(task_id, assignee, actor="claude")
+    except KeyError:
+        return _err(f"task {task_id} not found")
+    except RuntimeError as e:
+        return _err(str(e))
+    return _ok(t.to_public())
+
+
+@mcp.tool()
+def kanban_chat(task_id: str) -> dict[str, Any]:
+    """Persisted agent chat for a task — parity with GET /api/tasks/{id}/chat.
+
+    task_chat messages (role/content/ts/seq), ascending; survives the run.
+    """
+    store = _get_store()
+    try:
+        if not store.get_task(task_id):
+            return _err(f"task {task_id} not found")
+        messages = store.get_chat(task_id)
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok({"task_id": task_id, "messages": messages})
+
+
+@mcp.tool()
+def kanban_send_chat(task_id: str, role: str, content: str) -> dict[str, Any]:
+    """Append a message to a task's persisted chat — parity with POST /api/tasks/{id}/chat.
+
+    Args:
+        task_id: target task.
+        role: author, e.g. agent:fe / user.
+        content: message text.
+    """
+    try:
+        msg = _get_store().add_chat_message(task_id, role, content)
+    except KeyError:
+        return _err(f"task {task_id} not found")
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok(msg)
+
+
+@mcp.tool()
+def kanban_run(task_id: str) -> dict[str, Any]:
+    """The task_runs row for a task — parity with GET /api/tasks/{id}/runs.
+
+    Live agent run: pid, role, status, control_port, tokens_used, model,
+    started_at/ended_at. None when the task has no registered run.
+    """
+    store = _get_store()
+    try:
+        if not store.get_task(task_id):
+            return _err(f"task {task_id} not found")
+        run = store.get_run(task_id)
+    except Exception as e:  # noqa: BLE001
+        return _err(str(e))
+    return _ok({"task_id": task_id, "run": run})
+
+
+@mcp.tool()
+def kanban_register_run(
+    task_id: str,
+    pid: int | None = None,
+    started_at: str | None = None,
+    ended_at: str | None = None,
+    model: str | None = None,
+    role: str | None = None,
+    status: str | None = None,
+    tokens_used: int | None = None,
+    control_port: int | None = None,
+) -> dict[str, Any]:
+    """Upsert the task_runs row — parity with POST /api/tasks/{id}/runs.
+
+    Only the provided fields are written (the driver registers at start:
+    pid/started_at/model/role/control_port/status, and on exit:
+    ended_at/status/tokens_used). At least one field is required.
+    """
+    try:
+        run = _get_store().register_run(
+            task_id,
+            pid=pid,
+            started_at=started_at,
+            ended_at=ended_at,
+            model=model,
+            role=role,
+            status=status,
+            tokens_used=tokens_used,
+            control_port=control_port,
+        )
+    except KeyError:
+        return _err(f"task {task_id} not found")
+    except ValueError as e:
+        return _err(str(e))
+    return _ok({"task_id": task_id, "run": run})
+
+
+def _live_run(task_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    """task_runs row for a live agent run, or (None, error message)."""
+    store = _get_store()
+    try:
+        if not store.get_task(task_id):
+            return None, f"task {task_id} not found"
+        run = store.get_run(task_id)
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+    if not run or run.get("status") != "running" or not run.get("control_port"):
+        return None, f"task {task_id} has no live agent run"
+    return run, None
+
+
+@mcp.tool()
+def kanban_stop(
+    task_id: str, reason: str, to_status: str = "blocked"
+) -> dict[str, Any]:
+    """Stop the task's live agent — parity with POST /api/tasks/{id}/agent/stop.
+
+    Relays to the driver's control socket; the driver SIGINTs the omp
+    session, posts ``reason`` as a comment and moves the task: "blocked"
+    (human intervention, default) or "approved" (routine auto-retry, D2).
+    409-style error when the task has no live run.
+    """
+    if to_status not in ("blocked", "approved"):
+        return _err("to_status must be 'blocked' or 'approved'")
+    run, err = _live_run(task_id)
+    if err:
+        return _err(err)
+    try:
+        resp = control_request(
+            run["control_port"],
+            {"cmd": "stop", "reason": reason, "to_status": to_status},
+        )
+    except ControlUnavailable as e:
+        return _err(str(e))
+    return _ok({"cmd": "stop", "driver": resp})
+
+
+@mcp.tool()
+def kanban_steer(task_id: str, text: str) -> dict[str, Any]:
+    """Inject a message into the task's live agent session — parity with
+    POST /api/tasks/{id}/agent/steer.
+
+    Relays to the driver's control socket; the message is sent to the omp
+    session as if the user typed it. 409-style error when the task has no
+    live run.
+    """
+    if not text.strip():
+        return _err("text is required")
+    run, err = _live_run(task_id)
+    if err:
+        return _err(err)
+    try:
+        resp = control_request(
+            run["control_port"],
+            {"cmd": "steer", "text": text, "comment_id": None},
+        )
+    except ControlUnavailable as e:
+        return _err(str(e))
+    return _ok({"cmd": "steer", "driver": resp})
 
 
 # ---------------------------------------------------------------------------

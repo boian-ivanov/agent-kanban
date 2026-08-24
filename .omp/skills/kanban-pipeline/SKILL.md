@@ -13,20 +13,32 @@ commit & push, close, and dispatch the next card.
 
 - Server: `http://127.0.0.1:7777` · project: `agent-kanban` (repo
   `~/Projects/agent-kanban`, board id prefix `AK-` since T-316)
-- REST: `GET /api/board?project=agent-kanban`, `GET /api/tasks/{id}`,
-  `GET /api/tasks/{id}/runs` (live run: pid, role, status, control_port,
-  tokens_used), `GET /api/tasks/{id}/chat` (persisted messages),
+- REST: `GET /api/board?project=agent-kanban`, `GET /api/tasks`
+  (filtered: project/status/assignee/parent_id/updated_since),
+  `GET /api/tasks/{id}` (full card, `?since_seq=` comment poll),
   `GET /api/tasks/{id}/context` (agent context bundle),
-  `POST /api/tasks/{id}/comment|move`, `POST /api/tasks/{id}/agent/stop|steer`
+  `GET /api/tasks/{id}/children?include=summary|full`,
+  `GET /api/tasks/{id}/subtree` (recursive descendant tree),
+  `GET /api/tasks/{id}/chat` (persisted messages) / `POST` (add message),
+  `GET /api/tasks/{id}/runs` (live run: pid, role, status, control_port,
+  tokens_used) / `POST` (driver upsert),
+  `POST /api/tasks/{id}/claim` (atomic: assignee=agent:<role> + approved→in_progress),
+  `POST /api/tasks/{id}/comment|move`,
+  `POST /api/tasks/{id}/agent/stop|steer` (control socket relay)
 - Columns: backlog → approved → analyst → in_progress → testing → uat → done;
   blocked / cancelled. `approved` fires the launcher; `testing` fires the
   **verifier** (T-314).
 - Pipeline: launcher (thin) → `examples/task-driver.py` (claims atomically
-  assignee+status, registers `task_runs`, runs the omp session, writes chat to
-  DB, exposes control socket) → work agent → moves to `testing` → verifier
-  agent (role `verification`, no claim) gates + smokes → `done` (PASS) or
-  `approved` (FAIL, with findings) or `blocked` (human intervention needed).
-  **Agents never commit** (D1-lock) — the orchestrator commits & pushes.
+  via `POST /api/tasks/{id}/claim`, registers `task_runs`, runs the omp
+  session, writes chat to DB (`task_chat`), exposes control socket) → work
+  agent → moves to `testing` → verifier agent (role `verification`, no
+  claim) gates + smokes → `done` (PASS) or `approved` (FAIL, with findings)
+  or `blocked` (human intervention needed). **Agents never commit**
+  (D1-lock) — the orchestrator commits & pushes.
+- **Budgets (T-312, D5)**: the driver enforces `max_tokens` (default 30M),
+  `max_duration` (default 60 min), a token-scaled no-progress watchdog and
+  dot-output detection; before any interrupt it re-verifies run ownership
+  (pid == the driver pid).
 
 ## The Loop
 
@@ -106,6 +118,14 @@ commit & push, close, and dispatch the next card.
   session — continue").
 - **Run row staleness**: a dead driver can leave `status=running`. Fix via the
   `POST /api/tasks/{id}/runs` upsert (`{"status":"failed","ended_at":…}`).
+- **Verifier cleanup kills retry (3x, 2026-08-24)**: the verifier's
+  smoke-test cleanup killed the retry's process — cleanup was not
+  ownership-scoped. Rule (agents.json constraint + verification prompt):
+  only stop processes YOU spawned — record the exact pid at spawn and the
+  exact port you bound; never `pkill` by pattern or kill by port alone
+  (`lsof -ti :PORT` can match a different owner); never touch the live board
+  on 7777 or another task's driver/omp session. On detection: check
+  `task_runs`/`ps` for the surviving pid and restart the retry.
 - **Edit-tool mangling**: agents repeatedly corrupt files with fuzzy edits
   (deleted rules, clobbered function tails, ASCII `+` vs `＋`). They
   self-repair; verify with the gate + focused diff review. If an agent's edit

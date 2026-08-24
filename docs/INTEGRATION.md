@@ -39,20 +39,28 @@ The kanban server is the same in all three cases — the difference is only how 
 `KANBAN_PROJECT_ID` — default project for `kanban_create` calls without an argument.
 `KANBAN_ACTOR` — author name written into `task_history` for every move/comment the agent makes. Set this to something other than `user` (e.g. `claude`) so the history clearly distinguishes agent actions from human drag-drops in the UI.
 
-Restart Claude Code (or run `claude mcp list` to confirm `✓ Connected`). 14 tools become available:
+Restart Claude Code (or run `claude mcp list` to confirm `✓ Connected`). 24 tools become available:
 
 | Tool | Purpose |
 |---|---|
 | `kanban_columns` | list of columns + ownership semantics |
-| `kanban_list` | tasks with optional status / assignee filters |
+| `kanban_list` | tasks with optional status / assignee / project / parent / updated-since filters (parity with `GET /api/tasks`) |
 | `kanban_get` | full card with history + links + blockers |
-| `kanban_pull` | atomically claim an `approved` task → `analyst`, assignee = current agent |
+| `kanban_context` | agent context bundle — task + ancestor chain + recent comments + children summary + shared constraints (one call) |
+| `kanban_children` | direct children, summary or full cards (`include="full"` — scoping) |
+| `kanban_subtree` | recursive descendant tree (epic → stories → tickets) in one call |
+| `kanban_pull` | atomically claim an `approved` task → `analyst`, assignee = current agent (legacy analyst-flow alias) |
+| `kanban_claim` | atomically claim `approved` → `in_progress` with `assignee=agent:<role>` (driver claim, parity with `POST /api/tasks/{id}/claim`) |
 | `kanban_move` | move card to a new column |
 | `kanban_comment` | append comment to history |
-| `kanban_create` | new card |
+| `kanban_chat` / `kanban_send_chat` | read / append the persisted per-task chat (`task_chat`) |
+| `kanban_run` / `kanban_register_run` | read / upsert the task_runs row (pid, model, role, control_port, tokens) |
+| `kanban_stop` / `kanban_steer` | stop the live agent (blocked / approved) or inject a message into its session |
+| `kanban_create` | new card (supports `parent_id` / `kind` hierarchy) |
 | `kanban_link` | attach memory/file/pr/url link |
 | `kanban_blockers` | set/replace inter-task blockers |
 | `kanban_update` | edit title/priority/size/description/blocker |
+| `kanban_projects` / `kanban_board` / `kanban_search` / `kanban_my_active` | board overview, search, and "what am I working on" queries |
 
 **Example prompt for the agent:**
 
@@ -226,16 +234,75 @@ def dispatch(name, args):
 - **Static OpenAPI 3.1 spec**: [`docs/openapi.yaml`](openapi.yaml) (947 lines, 26 KB)
 - **Live JSON**: `http://localhost:7777/openapi.json`
 
-Key endpoints:
-
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/board?project=<id>` | board view (tasks grouped by column) |
-| GET | `/api/projects` | list of projects |
-| POST | `/api/projects` | create project |
-| GET | `/api/tasks/{id}` | full task with history |
-| POST | `/api/tasks` | create task |
+| GET | `/api/tasks` | **filtered task list** — `project` / `status` / `assignee` / `parent_id` / `updated_since` (summary cards) |
+| GET | `/api/tasks/{id}` | full task with history (`?since_seq=` for incremental comment polls) |
+| GET | `/api/tasks/{id}/context` | agent context bundle (task + ancestors + comments + children + constraints) |
+| GET | `/api/tasks/{id}/children?include=summary\|full` | direct children (full = complete cards) |
+| GET | `/api/tasks/{id}/subtree` | recursive descendant tree (epic → stories → tickets) |
+| POST | `/api/tasks` | create task (supports `parent_id` / `kind`) |
 | PATCH | `/api/tasks/{id}` | edit fields |
+| POST | `/api/tasks/{id}/claim` | atomic claim: `assignee=agent:<role>` + `approved` → `in_progress` |
+| POST | `/api/tasks/{id}/move` | move `{to_status}` |
+| POST | `/api/tasks/{id}/assign` | assign/unassign `{assignee}` |
+| POST | `/api/tasks/{id}/comment` | comment `{text}` |
+| POST | `/api/tasks/{id}/links` | attach memory/file/pr/url link |
+| GET/POST | `/api/tasks/{id}/chat` | persisted per-task agent chat (`task_chat`) |
+| GET/POST | `/api/tasks/{id}/runs` | task_runs row (pid, model, role, status, control_port, tokens) |
+| POST | `/api/tasks/{id}/agent/stop` | stop the live agent (`reason`, `to_status`: blocked \| approved) |
+| POST | `/api/tasks/{id}/agent/steer` | inject a message into the live agent session |
+| GET | `/api/tasks/{id}/log/stream` | SSE: live agent log stream |
+
+### Agent context protocol (epic → story → task)
+
+The hierarchy exists so dispatched agents get the FULL context of their ticket:
+
+- **Upward (automatic)**: the driver fetches `GET /api/tasks/{id}/context` before
+  every run and injects the bundle — task fields, ancestor chain, recent
+  comments, a `children` summary, shared constraints. Agents should NOT
+  re-fetch context; it is already in their prompt.
+- **Downward (children)**: `GET /api/tasks/{id}/children?include=full` returns
+  full child cards in one call (description/acceptance/parent chain/comments).
+  `GET /api/tasks/{id}/subtree` returns the complete recursive descendant tree
+  with nested `children` — one call, no N+1.
+- **Scoping flow (D3)**: an epic/story assigned `agent:scoping` fetches
+  `/subtree` first, reviews it against the codebase, creates child
+  stories/tickets (`parent_id` + description + acceptance, never
+  `status:approved`), comments a summary and moves the epic/story to `uat`.
+
+### Agent lifecycle: claim, chat, stop/steer, budgets
+
+- **Claim**: `POST /api/tasks/{id}/claim` sets `assignee=agent:<role>` and moves
+  `approved` → `in_progress` atomically (history-recorded, idempotent for the
+  same assignee, 409 on ownership/status conflicts). The task driver claims
+  this way at dispatch.
+- **Chat**: `task_chat` is the single source of truth for the agent
+  conversation — `GET /api/tasks/{id}/chat` (ascending `seq`) and
+  `POST /api/tasks/{id}/chat` (`{role, content}`). Per-task by construction,
+  persists after the run ends.
+- **Stop/steer**: `POST /api/tasks/{id}/agent/stop` (`reason`, `to_status`
+  `blocked` for human intervention or `approved` for a routine auto-retry —
+  D2) SIGINTs the omp session, comments the reason and moves the task.
+  `POST /api/tasks/{id}/agent/steer` injects a user message into the live
+  session. Both relay through the driver's control socket (port in
+  `task_runs.control_port`); 409 when no live run is registered.
+- **Budgets (D5)**: the driver enforces `max_tokens` (default 30M),
+  `max_duration` (default 60 min), a token-scaled no-progress watchdog and
+  dot-output detection. Before any interrupt the driver re-verifies it still
+  owns the run row (non-owner never touches the board).
+
+### Verification agent (T-314)
+
+A task arriving in `testing` fires `examples/launch-verifier.sh`; the verifier
+(role `verification`) runs the repo gate, smokes the changed path, then moves
+the task `done` (PASS, with evidence) or `approved` (FAIL, with findings) or
+`blocked` (human intervention). Verifiers never commit (D1) — the board owner
+commits after `done`. **Smoke-test cleanup is ownership-scoped**: only the
+processes the verifier itself spawned are stopped (exact pid recorded at
+spawn; never `pkill` by pattern or kill by port — the live board on 7777 or
+the retry's process may own it).
+
 ### Ticket IDs
 
 IDs are per-project: `{code}-{seq:03d}` (e.g. `SP-001`), where `code` is the
