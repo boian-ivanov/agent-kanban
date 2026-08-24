@@ -423,6 +423,16 @@ class Store:
             row, eager_links=True, eager_history=True, eager_tree=True
         )
 
+    def get_history_since(self, task_id: str, since_seq: int) -> list[TaskHistory]:
+        """History rows with id > since_seq, ascending — for the agent
+        driver's comment poll (GET /api/tasks/{id}?since_seq=N)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM task_history WHERE task_id=? AND id>? ORDER BY id",
+                (task_id, since_seq),
+            ).fetchall()
+        return [TaskHistory(**dict(r)) for r in rows]
+
     def board(self) -> dict[str, list[Task]]:
         """Group tasks by status, in column order."""
         result: dict[str, list[Task]] = {s: [] for s in STATUSES}
@@ -696,7 +706,9 @@ class Store:
         assert t is not None
         return t
 
-    def add_comment(self, task_id: str, text: str, *, actor: str) -> None:
+    def add_comment(self, task_id: str, text: str, *, actor: str) -> int:
+        """Append a comment history row; returns its history id (for
+        since_seq polling by the agent driver)."""
         ts = _now()
         with self._lock:
             row = self._conn.execute(
@@ -704,12 +716,13 @@ class Store:
             ).fetchone()
             if not row:
                 raise KeyError(task_id)
-            self._conn.execute(
+            cur = self._conn.execute(
                 """INSERT INTO task_history
                    (task_id, ts, actor, action, from_status, to_status, comment)
                    VALUES (?, ?, ?, 'comment', NULL, NULL, ?)""",
                 (task_id, ts, actor, text),
             )
+            return int(cur.lastrowid)
 
     def add_chat_message(self, task_id: str, role: str, content: str) -> dict[str, Any]:
         """Append one message to task_chat (1-based per-task seq, ISO ts)."""

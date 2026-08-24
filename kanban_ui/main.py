@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 
 from kanban_store import Store, STATUSES, status_meta
 from kanban_store.store import DEFAULT_PROJECT_ID
+from kanban_ui.agent_control import ControlUnavailable, control_request
 from kanban_ui.automation import (
     InboxWatcher,
     RuleEngine,
@@ -208,6 +209,21 @@ class RunRequest(BaseModel):
     status: str | None = None
     tokens_used: int | None = None
     control_port: int | None = None
+
+
+class AgentStopRequest(BaseModel):
+    reason: str = Field(..., description="stop reason, recorded as the task comment")
+    to_status: str = Field(
+        "blocked",
+        description="post-stop task status (D2): 'blocked' for human "
+        "intervention (default), 'approved' for a routine auto-retry",
+    )
+
+
+class AgentSteerRequest(BaseModel):
+    text: str = Field(
+        ..., min_length=1, description="user message injected into the live session"
+    )
 
 
 class ProjectCreate(BaseModel):
@@ -718,10 +734,19 @@ def list_tasks_api(
 
 
 @app.get("/api/tasks/{task_id}")
-def get_task(task_id: str) -> dict[str, Any]:
+def get_task(
+    task_id: str,
+    since_seq: int | None = Query(
+        None,
+        description="only return history/comments rows with id > since_seq "
+        "(agent driver comment poll)",
+    ),
+) -> dict[str, Any]:
     t = _store.get_task(task_id)
     if not t:
         raise HTTPException(404, f"task {task_id} not found")
+    if since_seq is not None:
+        t.history = [h for h in t.history if h.id > since_seq]
     return t.to_public()
 
 
@@ -856,20 +881,20 @@ async def assign_task(task_id: str, req: AssignRequest) -> dict[str, Any]:
 @app.post("/api/tasks/{task_id}/comment", status_code=201)
 async def add_comment(task_id: str, req: CommentRequest) -> dict[str, Any]:
     try:
-        _store.add_comment(task_id, req.text, actor=_actor())
+        comment_id = _store.add_comment(task_id, req.text, actor=_actor())
     except KeyError:
         raise HTTPException(404, f"task {task_id} not found")
     t = _store.get_task(task_id)
     if t:
-        await emit_event(
-            "task_commented",
-            {
-                "task": t.to_public(),
-                "project": _project_payload(t.project_id),
-                "comment": req.text,
-            },
-        )
-    return {"ok": True}
+        payload = {
+            "task": t.to_public(),
+            "project": _project_payload(t.project_id),
+            "comment": req.text,
+            "comment_id": comment_id,
+        }
+        await emit_event("task_commented", payload)
+        emit_rule_event("task_commented", payload)
+    return {"ok": True, "comment_id": comment_id}
 
 
 @app.post("/api/tasks/{task_id}/links", status_code=201)
@@ -960,6 +985,58 @@ def register_run(task_id: str, req: RunRequest) -> dict[str, Any]:
     return {"task_id": task_id, "run": run}
 
 
+# ---------------------------------------------------------------------------
+# Agent control: stop / steer (T-311)
+# ---------------------------------------------------------------------------
+
+
+def _live_run(task_id: str) -> dict[str, Any]:
+    """task_runs row for a live agent run, or HTTP 409/404."""
+    if _store.get_task(task_id) is None:
+        raise HTTPException(404, f"task {task_id} not found")
+    run = _store.get_run(task_id)
+    if not run or run.get("status") != "running" or not run.get("control_port"):
+        raise HTTPException(409, f"task {task_id} has no live agent run")
+    return run
+
+
+@app.post("/api/tasks/{task_id}/agent/stop")
+def agent_stop(task_id: str, req: AgentStopRequest) -> dict[str, Any]:
+    """Relay a stop to the task's live agent driver.
+
+    The driver SIGINTs the omp session, posts the reason as a comment and
+    moves the task (blocked for human intervention / approved for a routine
+    auto-retry — D2). 409 when no live run is registered.
+    """
+    if req.to_status not in ("blocked", "approved"):
+        raise HTTPException(400, "to_status must be 'blocked' or 'approved'")
+    run = _live_run(task_id)
+    try:
+        resp = control_request(
+            run["control_port"],
+            {"cmd": "stop", "reason": req.reason, "to_status": req.to_status},
+        )
+    except ControlUnavailable as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True, "cmd": "stop", "driver": resp}
+
+
+@app.post("/api/tasks/{task_id}/agent/steer")
+def agent_steer(task_id: str, req: AgentSteerRequest) -> dict[str, Any]:
+    """Inject a user message into the task's live agent session."""
+    run = _live_run(task_id)
+    try:
+        resp = control_request(
+            run["control_port"],
+            {"cmd": "steer", "text": req.text, "comment_id": None},
+        )
+    except ControlUnavailable as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True, "cmd": "steer", "driver": resp}
+
+
+# ---------------------------------------------------------------------------
+# Agent log streaming (SSE)
 # ---------------------------------------------------------------------------
 # Agent log streaming (SSE)
 # ---------------------------------------------------------------------------

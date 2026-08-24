@@ -521,6 +521,18 @@ paths:
         schema:
           type: string
           title: Task Id
+      - name: since_seq
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: only return history/comments rows with id > since_seq (agent
+            driver comment poll)
+          title: Since Seq
+        description: only return history/comments rows with id > since_seq (agent
+          driver comment poll)
       responses:
         '200':
           description: Successful Response
@@ -848,6 +860,79 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/agent/stop:
+    post:
+      summary: Agent Stop
+      description: 'Relay a stop to the task''s live agent driver.
+
+
+        The driver SIGINTs the omp session, posts the reason as a comment and
+
+        moves the task (blocked for human intervention / approved for a routine
+
+        auto-retry — D2). 409 when no live run is registered.'
+      operationId: agent_stop_api_tasks__task_id__agent_stop_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentStopRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Agent Stop Api Tasks  Task Id  Agent Stop Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/agent/steer:
+    post:
+      summary: Agent Steer
+      description: Inject a user message into the task's live agent session.
+      operationId: agent_steer_api_tasks__task_id__agent_steer_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentSteerRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Agent Steer Api Tasks  Task Id  Agent Steer Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/tasks/{task_id}/log/stream:
     get:
       summary: Stream Task Log
@@ -996,6 +1081,33 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
+    AgentSteerRequest:
+      properties:
+        text:
+          type: string
+          minLength: 1
+          title: Text
+          description: user message injected into the live session
+      type: object
+      required:
+      - text
+      title: AgentSteerRequest
+    AgentStopRequest:
+      properties:
+        reason:
+          type: string
+          title: Reason
+          description: stop reason, recorded as the task comment
+        to_status:
+          type: string
+          title: To Status
+          description: 'post-stop task status (D2): ''blocked'' for human intervention
+            (default), ''approved'' for a routine auto-retry'
+          default: blocked
+      type: object
+      required:
+      - reason
+      title: AgentStopRequest
     AssignRequest:
       properties:
         assignee:

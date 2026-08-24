@@ -26,6 +26,7 @@ Actions:
 
 All mutations use actor=automation. Hot-reload by file mtime.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,19 +38,20 @@ from pathlib import Path
 from typing import Any
 
 from kanban_store import Store, STATUSES
+from kanban_ui.agent_control import ControlUnavailable, control_request
 
 log = logging.getLogger("kanban.automation.rules")
 
 DEFAULT_INTERVAL = float(os.environ.get("KANBAN_AUTOMATION_INTERVAL", "60"))
 
-VALID_TRIGGERS = {"task_idle", "task_count_in_status", "task_moved"}
-VALID_ACTIONS = {"move_to", "add_comment", "set_priority", "run_command"}
+VALID_TRIGGERS = {"task_idle", "task_count_in_status", "task_moved", "task_commented"}
+VALID_ACTIONS = {"move_to", "add_comment", "set_priority", "run_command", "agent_steer"}
 VALID_PRIORITIES = {"high", "normal", "low"}
 
 # Polling-mode triggers are processed in _run_once.
 # Reactive-mode triggers are processed in emit_rule_event() — invoked from
 # the endpoints right after the event, without an extra polling delay.
-REACTIVE_TRIGGERS = {"task_moved"}
+REACTIVE_TRIGGERS = {"task_moved", "task_commented"}
 
 _status: dict[str, Any] = {
     "running": False,
@@ -57,9 +59,9 @@ _status: dict[str, Any] = {
     "interval_sec": DEFAULT_INTERVAL,
     "rules_loaded": 0,
     "last_run_at": None,
-    "last_run_actions": [],     # actions from the last run: {ts, rule, task_id, action}
-    "last_reactive": [],        # reactive triggers (task_moved): {ts, rule, task_id, action}
-    "last_errors": [],          # parsing or apply errors: {ts, rule, error}
+    "last_run_actions": [],  # actions from the last run: {ts, rule, task_id, action}
+    "last_reactive": [],  # reactive triggers (task_moved): {ts, rule, task_id, action}
+    "last_errors": [],  # parsing or apply errors: {ts, rule, error}
     "config_mtime": None,
 }
 
@@ -105,8 +107,15 @@ def _validate_rule(rule: dict[str, Any], idx: int) -> list[str]:
             # to_status is required, from_status and project_id are optional
             if t.get("to_status") not in STATUSES:
                 errs.append(f"{name}: task_moved.to_status invalid")
-            if t.get("from_status") is not None and t.get("from_status") not in STATUSES:
+            if (
+                t.get("from_status") is not None
+                and t.get("from_status") not in STATUSES
+            ):
                 errs.append(f"{name}: task_moved.from_status invalid")
+        elif t["type"] == "task_commented":
+            # optional prefix filter on the comment text (e.g. "@agent")
+            if t.get("prefix") is not None and not isinstance(t["prefix"], str):
+                errs.append(f"{name}: task_commented.prefix must be a string")
     if a.get("type") not in VALID_ACTIONS:
         errs.append(f"{name}: action.type must be one of {sorted(VALID_ACTIONS)}")
     else:
@@ -214,6 +223,25 @@ def _apply_action(
             return "run_command: 'env' must be an object"
         asyncio.create_task(_spawn_command(cmd, args, log_file, ctx, env_extra))
         return f"run_command {Path(cmd).name} {args}"
+    elif a_type == "agent_steer":
+        # Forward the triggering comment to the task's live agent driver
+        # (T-311 steering path). Fails loudly when no live run exists so
+        # emit_rule_event logs it; the driver's own since_seq poll is the
+        # fallback for comments that never reach the socket.
+        ctx = dict(context or {})
+        ctx.setdefault("task_id", task_id)
+        text = ctx.get("comment", "")
+        if not text:
+            return "agent_steer: no comment in context"
+        run = store.get_run(task_id)
+        port = run.get("control_port") if run else None
+        if not port:
+            raise ControlUnavailable(f"{task_id}: no live agent run")
+        control_request(
+            port,
+            {"cmd": "steer", "text": text, "comment_id": ctx.get("comment_id")},
+        )
+        return f"agent_steer -> driver :{port}"
     return f"unknown action {a_type}"
 
 
@@ -237,26 +265,40 @@ async def _spawn_command(
             kw["stdout"] = asyncio.subprocess.DEVNULL
             kw["stderr"] = asyncio.subprocess.DEVNULL
         if env_extra:
-            merged_env = {**os.environ, **{str(k): str(v) for k, v in env_extra.items()}}
+            merged_env = {
+                **os.environ,
+                **{str(k): str(v) for k, v in env_extra.items()},
+            }
             kw["env"] = merged_env
         proc = await asyncio.create_subprocess_exec(cmd, *args, **kw)
         log.info(
             "run_command spawned: pid=%d cmd=%s args=%s ctx=%s",
-            proc.pid, cmd, args, ctx,
+            proc.pid,
+            cmd,
+            args,
+            ctx,
         )
         # Do not wait — an agent launcher may run for minutes/hours.
     except FileNotFoundError:
         log.error("run_command: cmd not found: %s", cmd)
         _status["last_errors"].insert(
-            0, {"ts": _now().isoformat(timespec="seconds"),
-                "rule": "run_command", "error": f"executable not found: {cmd}"}
+            0,
+            {
+                "ts": _now().isoformat(timespec="seconds"),
+                "rule": "run_command",
+                "error": f"executable not found: {cmd}",
+            },
         )
         _status["last_errors"] = _status["last_errors"][:10]
     except Exception as e:
         log.exception("run_command failed: %s", cmd)
         _status["last_errors"].insert(
-            0, {"ts": _now().isoformat(timespec="seconds"),
-                "rule": "run_command", "error": f"{cmd}: {e}"}
+            0,
+            {
+                "ts": _now().isoformat(timespec="seconds"),
+                "rule": "run_command",
+                "error": f"{cmd}: {e}",
+            },
         )
         _status["last_errors"] = _status["last_errors"][:10]
 
@@ -273,7 +315,12 @@ def _run_once(store: Store, rules: list[dict[str, Any]]) -> list[dict[str, Any]]
         except Exception as e:
             log.exception("rule '%s' selection failed", name)
             _status["last_errors"].insert(
-                0, {"ts": _now().isoformat(timespec="seconds"), "rule": name, "error": str(e)}
+                0,
+                {
+                    "ts": _now().isoformat(timespec="seconds"),
+                    "rule": name,
+                    "error": str(e),
+                },
             )
             _status["last_errors"] = _status["last_errors"][:10]
             continue
@@ -310,9 +357,10 @@ def emit_rule_event(event: str, payload: dict[str, Any]) -> None:
     """Reactive event handling (invoked from endpoints).
 
     Applies all enabled rules with trigger.type=event whose filters match
-    the payload. Currently ``task_moved`` is supported:
-        payload = {"task": {...}, "from_status": "...", "to_status": "...",
-                   "comment": "..." | None}
+    the payload. Supported events:
+        task_moved:      payload = {"task": ..., "from_status", "to_status",
+                                    "comment" | None}
+        task_commented:  payload = {"task": ..., "comment", "comment_id"}
     """
     if _engine is None:
         return
@@ -329,38 +377,120 @@ def emit_rule_event(event: str, payload: dict[str, Any]) -> None:
         if event == "task_moved":
             if trig.get("to_status") and trig["to_status"] != payload.get("to_status"):
                 continue
-            if trig.get("from_status") and trig["from_status"] != payload.get("from_status"):
+            if trig.get("from_status") and trig["from_status"] != payload.get(
+                "from_status"
+            ):
+                continue
+        elif event == "task_commented":
+            comment = payload.get("comment") or ""
+            prefix = trig.get("prefix")
+            if prefix and not comment.startswith(str(prefix)):
+                continue
+        else:
+            continue
+        if trig.get("project_id") and trig["project_id"] != task.get("project_id"):
+            continue
+        if rule.get("project_id") and rule["project_id"] != task.get("project_id"):
+            continue
+        if event == "task_moved":
+            ctx = {
+                "task_id": task_id,
+                "title": task.get("title", ""),
+                "project_id": task.get("project_id", ""),
+                "from_status": payload.get("from_status", ""),
+                "to_status": payload.get("to_status", ""),
+            }
+        else:
+            ctx = {
+                "task_id": task_id,
+                "title": task.get("title", ""),
+                "project_id": task.get("project_id", ""),
+                "comment": payload.get("comment", ""),
+                "comment_id": payload.get("comment_id"),
+            }
+        try:
+            desc = _apply_action(_engine.store, task_id, rule["action"], ctx)
+            _status["last_reactive"].insert(
+                0,
+                {
+                    "ts": _now().isoformat(timespec="seconds"),
+                    "rule": rule.get("name", "?"),
+                    "event": event,
+                    "task_id": task_id,
+                    "action": desc,
+                },
+            )
+            _status["last_reactive"] = _status["last_reactive"][:20]
+            log.info(
+                "reactive rule '%s' on %s: %s", rule.get("name", "?"), task_id, desc
+            )
+        except Exception as e:
+            log.exception("reactive rule '%s' failed", rule.get("name", "?"))
+            _status["last_errors"].insert(
+                0,
+                {
+                    "ts": _now().isoformat(timespec="seconds"),
+                    "rule": rule.get("name", "?"),
+                    "error": f"{task_id}: {e}",
+                },
+            )
+            _status["last_errors"] = _status["last_errors"][:10]
+    if _engine is None:
+        return
+    _engine._maybe_reload()
+    rules = _engine._rules
+    task = payload.get("task") or {}
+    task_id = task.get("id")
+    if not task_id:
+        return
+    for rule in rules:
+        trig = rule["trigger"]
+        if trig["type"] != event:
+            continue
+        if event == "task_moved":
+            if trig.get("to_status") and trig["to_status"] != payload.get("to_status"):
+                continue
+            if trig.get("from_status") and trig["from_status"] != payload.get(
+                "from_status"
+            ):
                 continue
             if trig.get("project_id") and trig["project_id"] != task.get("project_id"):
                 continue
             if rule.get("project_id") and rule["project_id"] != task.get("project_id"):
                 continue
             ctx = {
-                "task_id":     task_id,
-                "title":       task.get("title", ""),
-                "project_id":  task.get("project_id", ""),
+                "task_id": task_id,
+                "title": task.get("title", ""),
+                "project_id": task.get("project_id", ""),
                 "from_status": payload.get("from_status", ""),
-                "to_status":   payload.get("to_status", ""),
+                "to_status": payload.get("to_status", ""),
             }
             try:
                 desc = _apply_action(_engine.store, task_id, rule["action"], ctx)
-                _status["last_reactive"].insert(0, {
-                    "ts": _now().isoformat(timespec="seconds"),
-                    "rule": rule.get("name", "?"),
-                    "event": event,
-                    "task_id": task_id,
-                    "action": desc,
-                })
+                _status["last_reactive"].insert(
+                    0,
+                    {
+                        "ts": _now().isoformat(timespec="seconds"),
+                        "rule": rule.get("name", "?"),
+                        "event": event,
+                        "task_id": task_id,
+                        "action": desc,
+                    },
+                )
                 _status["last_reactive"] = _status["last_reactive"][:20]
-                log.info("reactive rule '%s' on %s: %s",
-                         rule.get("name", "?"), task_id, desc)
+                log.info(
+                    "reactive rule '%s' on %s: %s", rule.get("name", "?"), task_id, desc
+                )
             except Exception as e:
                 log.exception("reactive rule '%s' failed", rule.get("name", "?"))
-                _status["last_errors"].insert(0, {
-                    "ts": _now().isoformat(timespec="seconds"),
-                    "rule": rule.get("name", "?"),
-                    "error": f"{task_id}: {e}",
-                })
+                _status["last_errors"].insert(
+                    0,
+                    {
+                        "ts": _now().isoformat(timespec="seconds"),
+                        "rule": rule.get("name", "?"),
+                        "error": f"{task_id}: {e}",
+                    },
+                )
                 _status["last_errors"] = _status["last_errors"][:10]
 
 
@@ -371,7 +501,9 @@ class RuleEngine:
     which is invoked from the endpoints right after the event.
     """
 
-    def __init__(self, store: Store, rules_file: Path, interval: float = DEFAULT_INTERVAL):
+    def __init__(
+        self, store: Store, rules_file: Path, interval: float = DEFAULT_INTERVAL
+    ):
         global _engine
         _engine = self
         self.store = store
@@ -394,20 +526,31 @@ class RuleEngine:
         rules, errs = _load_rules(self.rules_file)
         for e in errs:
             _status["last_errors"].insert(
-                0, {"ts": _now().isoformat(timespec="seconds"), "rule": "_config_", "error": e}
+                0,
+                {
+                    "ts": _now().isoformat(timespec="seconds"),
+                    "rule": "_config_",
+                    "error": e,
+                },
             )
         _status["last_errors"] = _status["last_errors"][:10]
         self._rules = rules
         self._mtime = mtime
         _status["rules_loaded"] = len(rules)
-        _status["config_mtime"] = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds")
-        log.info("rules.json reloaded: %d active rules (errors: %d)", len(rules), len(errs))
+        _status["config_mtime"] = datetime.fromtimestamp(
+            mtime, tz=timezone.utc
+        ).isoformat(timespec="seconds")
+        log.info(
+            "rules.json reloaded: %d active rules (errors: %d)", len(rules), len(errs)
+        )
 
     async def run(self) -> None:
         _status["running"] = True
         _status["rules_file"] = str(self.rules_file)
         _status["interval_sec"] = self.interval
-        log.info("rule engine started: %s (interval=%ss)", self.rules_file, self.interval)
+        log.info(
+            "rule engine started: %s (interval=%ss)", self.rules_file, self.interval
+        )
         try:
             while not self._stop.is_set():
                 try:
