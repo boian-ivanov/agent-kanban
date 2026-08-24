@@ -236,9 +236,17 @@ Key endpoints:
 | GET | `/api/tasks/{id}` | full task with history |
 | POST | `/api/tasks` | create task |
 | PATCH | `/api/tasks/{id}` | edit fields |
-| POST | `/api/tasks/{id}/move` | drag-drop result |
-| POST | `/api/tasks/{id}/comment` | comment in history |
-| POST | `/api/tasks/{id}/links` | attach link |
+### Ticket IDs
+
+IDs are per-project: `{code}-{seq:03d}` (e.g. `SP-001`), where `code` is the
+project's uppercase prefix (`projects.code`, set via `POST /api/projects`
+or `PATCH /api/projects/{id}`). Each project's sequence starts at 001 and
+is tracked in `project_seq`. Projects without a code keep the legacy global
+`T-{n:03d}` ids (`meta('next_id')`); existing `T-###` tasks are never
+rewritten. A project code can only be changed before its first
+`{code}-###` ticket exists, and codes are unique across projects.
+
+---
 
 ---
 

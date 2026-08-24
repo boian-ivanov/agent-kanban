@@ -2,6 +2,8 @@
 -- v2: added projects + tasks.project_id (migration in Store._migrate_v2).
 -- v6: added tasks.parent_id + tasks.kind (Epic->Story->Ticket hierarchy),
 --     task_chat + task_runs tables (migration in Store._migrate_v6).
+-- v7: added projects.code (per-project ticket prefix, e.g. AK/SP) and the
+--     project_seq table (per-project id sequence; migration in Store._migrate_v7).
 
 CREATE TABLE IF NOT EXISTS projects (
     id          TEXT PRIMARY KEY,                    -- 'finops', 'kanban-dev', ...
@@ -12,11 +14,12 @@ CREATE TABLE IF NOT EXISTS projects (
     archived    INTEGER NOT NULL DEFAULT 0,          -- 0/1
     path        TEXT,                                -- project directory (optional)
     model       TEXT,                                -- omp model override (e.g. "deepinfra/deepseek-v4-flash")
+    code        TEXT,                                -- ticket id prefix (upper, e.g. AK/SP/NM); NULL = legacy T-###
     created_at  TEXT NOT NULL                        -- ISO8601
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
-    id              TEXT PRIMARY KEY,                -- T-001, T-002, ...
+    id              TEXT PRIMARY KEY,                -- T-001, T-002, ... or AK-001, SP-001, ...
     title           TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'backlog', -- backlog/approved/analyst/in_progress/testing/uat/done/blocked/cancelled
     priority        TEXT NOT NULL DEFAULT 'normal',  -- high/normal/low
@@ -38,6 +41,11 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, column_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
 -- idx_tasks_project_status is created in Store._migrate_v2 (after ALTER TABLE for older databases).
 -- idx_tasks_parent is created in Store._migrate_v6 (after ALTER TABLE for older databases).
+
+CREATE TABLE IF NOT EXISTS project_seq (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    next_seq   INTEGER NOT NULL DEFAULT 1            -- next {code}-{seq:03d} ticket number
+);
 
 CREATE TABLE IF NOT EXISTS task_links (
     task_id  TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -100,7 +108,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '6');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '7');
 INSERT OR IGNORE INTO meta(key, value) VALUES ('next_id', '1');
 
 -- Default project — read from env ``KANBAN_DEFAULT_PROJECT_ID`` / ``..._NAME``

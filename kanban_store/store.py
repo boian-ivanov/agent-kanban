@@ -113,6 +113,7 @@ class Project:
     created_at: str
     path: str | None = None
     model: str | None = None
+    code: str | None = None
     task_counts: dict[str, int] = field(default_factory=dict)
     total_tasks: int = 0
 
@@ -162,6 +163,7 @@ class Store:
             self._migrate_v4()
             self._migrate_v5()
             self._migrate_v6()
+            self._migrate_v7()
 
     def _migrate_v5(self) -> None:
         """v4 → v5: projects.model TEXT (omp model override)."""
@@ -202,6 +204,27 @@ class Store:
         ).fetchone()
         if row and int(row["value"]) < 6:
             self._conn.execute("UPDATE meta SET value='6' WHERE key='schema_version'")
+
+    def _migrate_v7(self) -> None:
+        """v6 → v7: projects.code (per-project ticket prefix) and the
+        project_seq table (per-project id sequence).
+
+        Idempotent: checks PRAGMA table_info before running ALTER; the table
+        is created via schema.sql and here for older databases.
+        """
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()}
+        if "code" not in cols:
+            self._conn.execute("ALTER TABLE projects ADD COLUMN code TEXT")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS project_seq ("
+            "  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,"
+            "  next_seq   INTEGER NOT NULL DEFAULT 1)"
+        )
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        if row and int(row["value"]) < 7:
+            self._conn.execute("UPDATE meta SET value='7' WHERE key='schema_version'")
 
     def _migrate_v4(self) -> None:
         """v3 → v4: project_sources table (created via schema.sql,
@@ -272,8 +295,31 @@ class Store:
     # ID generation
     # ------------------------------------------------------------------
 
-    def _next_id(self) -> str:
+    def _next_id(self, project_id: str = DEFAULT_PROJECT_ID) -> str:
+        """Next ticket id for a project.
+
+        With a project code set: ``{code}-{seq:03d}`` (AK-001, SP-002, ...),
+        sequence tracked per project in ``project_seq`` and starting at 001.
+        Without a code (legacy projects): global ``T-{n:03d}`` from the
+        ``meta('next_id')`` counter, unchanged.
+        """
         with self._lock:
+            row = self._conn.execute(
+                "SELECT code FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            code = row["code"] if row and row["code"] else None
+            if code:
+                seq_row = self._conn.execute(
+                    "SELECT next_seq FROM project_seq WHERE project_id=?",
+                    (project_id,),
+                ).fetchone()
+                n = int(seq_row["next_seq"]) if seq_row else 1
+                self._conn.execute(
+                    "INSERT INTO project_seq (project_id, next_seq) VALUES (?, ?) "
+                    "ON CONFLICT(project_id) DO UPDATE SET next_seq=excluded.next_seq",
+                    (project_id, n + 1),
+                )
+                return f"{code}-{n:03d}"
             row = self._conn.execute(
                 "SELECT value FROM meta WHERE key='next_id'"
             ).fetchone()
@@ -361,7 +407,7 @@ class Store:
         with self._lock:
             self._conn.execute("BEGIN")
             try:
-                tid = task_id or self._next_id()
+                tid = task_id or self._next_id(project_id)
                 # column_order — last in the column + 1 (per project)
                 row = self._conn.execute(
                     "SELECT COALESCE(MAX(column_order), -1) AS m FROM tasks "
@@ -688,11 +734,14 @@ class Store:
         sort_order: int | None = None,
         path: str | None = None,
         model: str | None = None,
+        code: str | None = None,
     ) -> Project:
         ts = _now()
         with self._lock:
             self._conn.execute("BEGIN")
             try:
+                if code is not None:
+                    self._check_code_available(project_id, code)
                 if sort_order is None:
                     r = self._conn.execute(
                         "SELECT COALESCE(MAX(sort_order), -1) AS m FROM projects"
@@ -700,9 +749,9 @@ class Store:
                     sort_order = (r["m"] + 1) if r else 0
                 self._conn.execute(
                     """INSERT INTO projects
-                       (id, name, color, icon, sort_order, archived, path, model, created_at)
-                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)""",
-                    (project_id, name, color, icon or name[:1].upper(), sort_order, path, model, ts),
+                       (id, name, color, icon, sort_order, archived, path, model, code, created_at)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+                    (project_id, name, color, icon or name[:1].upper(), sort_order, path, model, code, ts),
                 )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -722,6 +771,7 @@ class Store:
         sort_order: int | None = None,
         path: str | None = None,
         model: str | None = None,
+        code: str | None = None,
     ) -> Project:
         sets: list[str] = []
         params: list[Any] = []
@@ -736,6 +786,10 @@ class Store:
                 # Empty string clears nullable columns (path, model) to NULL.
                 # Other fields (name, color, icon) have NOT NULL — keep "" as-is.
                 params.append(None if val == "" and col in ("path", "model") else val)
+        if code is not None:
+            self._check_code_change(project_id, code)
+            sets.append("code = ?")
+            params.append(code or None)
         if not sets:
             p = self.get_project(project_id)
             if p is None:
@@ -754,6 +808,41 @@ class Store:
         p = self.get_project(project_id)
         assert p is not None
         return p
+
+    def _check_code_available(self, project_id: str, code: str) -> None:
+        """Raise ValueError if another project already uses ``code``.
+
+        Ticket ids are primary keys across the whole board — two projects
+        with the same prefix would collide on ``{code}-001``.
+        """
+        row = self._conn.execute(
+            "SELECT id FROM projects WHERE code=? AND id<>?",
+            (code, project_id),
+        ).fetchone()
+        if row:
+            raise ValueError(f"project code {code!r} already used by {row['id']!r}")
+
+    def _check_code_change(self, project_id: str, code: str) -> None:
+        """Guard a code change: unique, and only before the first
+        ``{code}-###`` ticket exists (legacy T-### tasks do not count).
+        """
+        if code:
+            self._check_code_available(project_id, code)
+        else:
+            # clearing the code back to legacy mode — always allowed
+            return
+        old = self.get_project(project_id)
+        old_code = old.code if old else None
+        if old_code and old_code != code:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE id LIKE ?",
+                (f"{old_code}-%",),
+            ).fetchone()
+            if row["n"] > 0:
+                raise ValueError(
+                    f"cannot change project code from {old_code!r} to {code!r}: "
+                    f"tickets already issued as {old_code}-###"
+                )
 
     # ------------------------------------------------------------------
     # Project sources (one source per project)
@@ -826,6 +915,7 @@ class Store:
             created_at=row["created_at"],
             path=row["path"] if "path" in row.keys() else None,
             model=row["model"] if "model" in row.keys() else None,
+            code=row["code"] if "code" in row.keys() else None,
         )
 
     # ------------------------------------------------------------------

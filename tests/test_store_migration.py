@@ -86,7 +86,7 @@ def test_migrate_v5_to_v6_lossless(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()["value"]
-            == "6"
+            == "7"
         )
 
         # tasks columns added
@@ -139,13 +139,13 @@ def test_migrate_v6_idempotent(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "6"
+            == "7"
         )
     finally:
         conn.close()
 
 
-def test_fresh_db_is_v6(tmp_path):
+def test_fresh_db_is_v7(tmp_path):
     db = tmp_path / "fresh.db"
     Store(db)
     conn = sqlite3.connect(str(db))
@@ -154,7 +154,7 @@ def test_fresh_db_is_v6(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "6"
+            == "7"
         )
         cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
         assert {"parent_id", "kind"} <= cols

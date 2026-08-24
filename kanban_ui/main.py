@@ -140,6 +140,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{0,3}$")
 
 
 class TaskCreate(BaseModel):
@@ -196,6 +197,11 @@ class ProjectCreate(BaseModel):
     sort_order: int | None = None
     path: str | None = None
     model: str | None = None
+    code: str | None = Field(
+        None,
+        description="ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); "
+        "None = legacy T-### ids",
+    )
 
 
 class ProjectUpdate(BaseModel):
@@ -205,6 +211,11 @@ class ProjectUpdate(BaseModel):
     sort_order: int | None = None
     path: str | None = None
     model: str | None = None
+    code: str | None = Field(
+        None,
+        description="ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); "
+        "None leaves it unchanged, \"\" clears back to legacy T-### ids",
+    )
 
 
 class ProjectArchiveRequest(BaseModel):
@@ -308,6 +319,13 @@ def _normalize_path(p: str | None) -> str | None:
     return os.path.abspath(os.path.expanduser(p))
 
 
+def _normalize_code(code: str | None) -> str | None:
+    """Normalize a project code: trim, uppercase; None/"" → None (legacy)."""
+    if not code:
+        return None
+    return code.strip().upper()
+
+
 @app.post("/api/projects", status_code=201)
 def create_project(req: ProjectCreate) -> dict[str, Any]:
     if not PROJECT_ID_RE.match(req.id):
@@ -316,20 +334,34 @@ def create_project(req: ProjectCreate) -> dict[str, Any]:
         )
     if _store.get_project(req.id) is not None:
         raise HTTPException(409, f"project {req.id} already exists")
-    p = _store.create_project(
-        req.id,
-        req.name,
-        color=req.color,
-        icon=req.icon,
-        sort_order=req.sort_order,
-        path=_normalize_path(req.path),
-        model=req.model or None,
-    )
+    code = _normalize_code(req.code)
+    if code is not None and not PROJECT_CODE_RE.match(code):
+        raise HTTPException(
+            400, "project code must match ^[A-Z][A-Z0-9]{0,3}$ (uppercase, 1-4 chars)"
+        )
+    try:
+        p = _store.create_project(
+            req.id,
+            req.name,
+            color=req.color,
+            icon=req.icon,
+            sort_order=req.sort_order,
+            path=_normalize_path(req.path),
+            model=req.model or None,
+            code=code,
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     return p.to_public()
 
 
 @app.patch("/api/projects/{project_id}")
 def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
+    code = _normalize_code(req.code)
+    if code is not None and not PROJECT_CODE_RE.match(code):
+        raise HTTPException(
+            400, "project code must match ^[A-Z][A-Z0-9]{0,3}$ (uppercase, 1-4 chars)"
+        )
     try:
         p = _store.update_project(
             project_id,
@@ -340,9 +372,12 @@ def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
             # an empty string clears path/model in the database
             path=_normalize_path(req.path) if req.path != "" else "",
             model=req.model or "",
+            code=code,
         )
     except KeyError:
         raise HTTPException(404, f"project {project_id} not found")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     return p.to_public()
 
 
