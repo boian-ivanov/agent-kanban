@@ -695,10 +695,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /api/tasks/{task_id}/blockers:
+  /api/tasks/{task_id}/claim:
     post:
-      summary: Set Blockers
-      operationId: set_blockers_api_tasks__task_id__blockers_post
+      summary: Claim Task
+      description: 'Atomic claim: assignee=agent:<role> + approved → in_progress.
+
+
+        History-recorded; idempotent for a re-claim by the same assignee.
+
+        Emits task_moved so the board/SSE stay current.'
+      operationId: claim_task_api_tasks__task_id__claim_post
       parameters:
       - name: task_id
         in: path
@@ -711,7 +717,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BlockersRequest'
+              $ref: '#/components/schemas/ClaimRequest'
       responses:
         '200':
           description: Successful Response
@@ -720,7 +726,122 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
-                title: Response Set Blockers Api Tasks  Task Id  Blockers Post
+                title: Response Claim Task Api Tasks  Task Id  Claim Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/chat:
+    get:
+      summary: Get Chat
+      operationId: get_chat_api_tasks__task_id__chat_get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Chat Api Tasks  Task Id  Chat Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Add Chat Message
+      operationId: add_chat_message_api_tasks__task_id__chat_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatMessageRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Add Chat Message Api Tasks  Task Id  Chat Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/runs:
+    get:
+      summary: Get Run
+      operationId: get_run_api_tasks__task_id__runs_get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Run Api Tasks  Task Id  Runs Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Register Run
+      description: Upsert the task_runs row (driver registers at start and on exit).
+      operationId: register_run_api_tasks__task_id__runs_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Register Run Api Tasks  Task Id  Runs Post
         '422':
           description: Validation Error
           content:
@@ -884,17 +1005,30 @@ components:
           title: Assignee
       type: object
       title: AssignRequest
-    BlockersRequest:
+    ChatMessageRequest:
       properties:
-        blocker_ids:
-          items:
-            type: string
-          type: array
-          title: Blocker Ids
+        role:
+          type: string
+          title: Role
+          description: author, e.g. agent:fe / user
+        content:
+          type: string
+          title: Content
       type: object
       required:
-      - blocker_ids
-      title: BlockersRequest
+      - role
+      - content
+      title: ChatMessageRequest
+    ClaimRequest:
+      properties:
+        assignee:
+          type: string
+          title: Assignee
+          description: claiming agent, e.g. agent:fe
+      type: object
+      required:
+      - assignee
+      title: ClaimRequest
     CommentRequest:
       properties:
         text:
@@ -1038,6 +1172,50 @@ components:
             it unchanged, "" clears back to legacy T-### ids
       type: object
       title: ProjectUpdate
+    RunRequest:
+      properties:
+        pid:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Pid
+        started_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Started At
+        ended_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ended At
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+        role:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Role
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        tokens_used:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Used
+        control_port:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Control Port
+      type: object
+      title: RunRequest
     SourceGitRequest:
       properties:
         repo_url:

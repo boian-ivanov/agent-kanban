@@ -13,12 +13,13 @@ Endpoints (v2):
     GET    /api/tasks/{task_id}       — full card with history
     POST   /api/tasks                 — create (project_id in payload)
     PATCH  /api/tasks/{task_id}       — update fields
-    POST   /api/tasks/{task_id}/move  — drag-drop result
-    POST   /api/tasks/{task_id}/comment
-    POST   /api/tasks/{task_id}/links
-    POST   /api/tasks/{task_id}/blockers
+    POST   /api/tasks/{task_id}/claim — atomic claim (assignee + approved→in_progress)
+    GET/POST /api/tasks/{task_id}/chat — per-message agent chat (task_chat)
+    GET/POST /api/tasks/{task_id}/runs — task_runs row (pid/model/role/control_port)
+    POST   /api/snapshot              — persist a board snapshot
     POST   /api/snapshot              — persist a board snapshot
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -105,7 +106,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     rules_task = asyncio.create_task(engine.run(), name="rule-engine")
     log.info(
         "automation: inbox=%s rules=%s webhooks=%s",
-        _inbox_dir(), _rules_file(), _webhooks_file(),
+        _inbox_dir(),
+        _rules_file(),
+        _webhooks_file(),
     )
     try:
         yield
@@ -124,6 +127,7 @@ app = FastAPI(title="Kanban", version="2.0", lifespan=lifespan)
 _cors_origins = os.environ.get("KANBAN_CORS_ORIGINS", "").strip()
 if _cors_origins:
     from fastapi.middleware.cors import CORSMiddleware
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
@@ -186,8 +190,24 @@ class LinkRequest(BaseModel):
     value: str
 
 
-class BlockersRequest(BaseModel):
-    blocker_ids: list[str]
+class ClaimRequest(BaseModel):
+    assignee: str = Field(..., description="claiming agent, e.g. agent:fe")
+
+
+class ChatMessageRequest(BaseModel):
+    role: str = Field(..., description="author, e.g. agent:fe / user")
+    content: str
+
+
+class RunRequest(BaseModel):
+    pid: int | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    model: str | None = None
+    role: str | None = None
+    status: str | None = None
+    tokens_used: int | None = None
+    control_port: int | None = None
 
 
 class ProjectCreate(BaseModel):
@@ -215,7 +235,7 @@ class ProjectUpdate(BaseModel):
     code: str | None = Field(
         None,
         description="ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); "
-        "None leaves it unchanged, \"\" clears back to legacy T-### ids",
+        'None leaves it unchanged, "" clears back to legacy T-### ids',
     )
 
 
@@ -413,7 +433,7 @@ def _save_git_secret(project_id: str, token: str) -> None:
     """Stores the token in kanban_data/.env-secrets with mode 600."""
     secrets_file = KANBAN_DATA / ".env-secrets"
     KANBAN_DATA.mkdir(parents=True, exist_ok=True)
-    var = f"KANBAN_GIT_TOKEN_{project_id.upper().replace('-','_')}"
+    var = f"KANBAN_GIT_TOKEN_{project_id.upper().replace('-', '_')}"
     lines: list[str] = []
     if secrets_file.exists():
         for line in secrets_file.read_text(encoding="utf-8").splitlines():
@@ -435,7 +455,10 @@ _PRIO_PATTERNS: list[tuple[re.Pattern[str], int]] = [
     (re.compile(r"^tasks?\b", re.I), 3),
     (re.compile(r"^todo\b", re.I), 3),
     (re.compile(r"^roadmap\b", re.I), 4),
-    (re.compile(r"\b(plan|backlog|tasks?|todo|roadmap)\b", re.I), 5),  # appears anywhere in the name
+    (
+        re.compile(r"\b(plan|backlog|tasks?|todo|roadmap)\b", re.I),
+        5,
+    ),  # appears anywhere in the name
     (re.compile(r"^claude\b", re.I), 7),
     (re.compile(r"^agents?\b", re.I), 8),
     (re.compile(r"^readme\b", re.I), 9),
@@ -473,12 +496,14 @@ def _scan_md_candidates(root: Path) -> list[dict[str, Any]]:
                 rel = str(entry.relative_to(root))
                 stat = entry.stat()
                 prio = _file_prio(entry.name, in_root=(sub == ""))
-                out.append({
-                    "file": rel,
-                    "size": stat.st_size,
-                    "modified": stat.st_mtime,
-                    "prio": prio,
-                })
+                out.append(
+                    {
+                        "file": rel,
+                        "size": stat.st_size,
+                        "modified": stat.st_mtime,
+                        "prio": prio,
+                    }
+                )
         except (OSError, PermissionError):
             continue
     out.sort(key=lambda x: (x["prio"], -x["modified"]))
@@ -531,9 +556,7 @@ def setup_source_plan_new(project_id: str) -> dict[str, Any]:
         raise HTTPException(404, f"project {project_id} not found")
     project_dir = _project_path_or_400(project_id)
     if not project_dir.exists():
-        raise HTTPException(
-            400, f"directory does not exist: {project_dir}"
-        )
+        raise HTTPException(400, f"directory does not exist: {project_dir}")
     plan_path = plan_md.init_plan_md(project_dir, p.id, p.name)
     plan_md.update_claude_md(
         project_dir / "CLAUDE.md", p.id, p.name, plan_relative="PLAN.md"
@@ -614,15 +637,13 @@ def setup_source_git(project_id: str, req: SourceGitRequest) -> dict[str, Any]:
         raise HTTPException(404, f"project {project_id} not found")
     if not req.repo_url.strip():
         raise HTTPException(400, "repo_url required")
-    _store.set_project_source(
-        project_id, "git", {"repo_url": req.repo_url.strip()}
-    )
+    _store.set_project_source(project_id, "git", {"repo_url": req.repo_url.strip()})
     if req.token:
         _save_git_secret(project_id, req.token)
     return {
         "ok": True,
         "source": _store.get_project_source(project_id),
-        "secret_var": f"KANBAN_GIT_TOKEN_{project_id.upper().replace('-','_')}",
+        "secret_var": f"KANBAN_GIT_TOKEN_{project_id.upper().replace('-', '_')}",
         "note": "Issue import will be added in a future release.",
     }
 
@@ -630,7 +651,9 @@ def setup_source_git(project_id: str, req: SourceGitRequest) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/archive")
 def archive_project(project_id: str, req: ProjectArchiveRequest) -> dict[str, Any]:
     if project_id == DEFAULT_PROJECT_ID and req.archived:
-        raise HTTPException(400, f"cannot archive default project '{DEFAULT_PROJECT_ID}'")
+        raise HTTPException(
+            400, f"cannot archive default project '{DEFAULT_PROJECT_ID}'"
+        )
     try:
         p = _store.archive_project(project_id, archived=req.archived)
     except KeyError:
@@ -728,10 +751,13 @@ async def create_task(req: TaskCreate) -> dict[str, Any]:
         links=req.links or None,
         project_id=req.project_id,
     )
-    await emit_event("task_created", {
-        "task": t.to_public(),
-        "project": _project_payload(t.project_id),
-    })
+    await emit_event(
+        "task_created",
+        {
+            "task": t.to_public(),
+            "project": _project_payload(t.project_id),
+        },
+    )
     return t.to_public()
 
 
@@ -753,18 +779,26 @@ async def update_task(task_id: str, req: TaskUpdate) -> dict[str, Any]:
     except KeyError:
         raise HTTPException(404, f"task {task_id} not found")
     changed = [
-        f for f, v in (
-            ("title", req.title), ("description", req.description),
-            ("acceptance", req.acceptance), ("priority", req.priority),
-            ("size", req.size), ("external_blocker", req.external_blocker),
+        f
+        for f, v in (
+            ("title", req.title),
+            ("description", req.description),
+            ("acceptance", req.acceptance),
+            ("priority", req.priority),
+            ("size", req.size),
+            ("external_blocker", req.external_blocker),
             ("assignee", req.assignee),
-        ) if v is not None
+        )
+        if v is not None
     ]
-    await emit_event("task_updated", {
-        "task": t.to_public(),
-        "project": _project_payload(t.project_id),
-        "changed_fields": changed,
-    })
+    await emit_event(
+        "task_updated",
+        {
+            "task": t.to_public(),
+            "project": _project_payload(t.project_id),
+            "changed_fields": changed,
+        },
+    )
     return t.to_public()
 
 
@@ -784,7 +818,7 @@ async def move_task(task_id: str, req: MoveRequest) -> dict[str, Any]:
         )
     except KeyError:
         raise HTTPException(404, f"task {task_id} not found")
-    if from_status != req.to_status:    # only emit on an actual move
+    if from_status != req.to_status:  # only emit on an actual move
         payload = {
             "task": t.to_public(),
             "project": _project_payload(t.project_id),
@@ -808,11 +842,14 @@ async def assign_task(task_id: str, req: AssignRequest) -> dict[str, Any]:
         t = _store.assign_task(task_id, req.assignee, actor=_actor())
     except KeyError:
         raise HTTPException(404, f"task {task_id} not found")
-    await emit_event("task_updated", {
-        "task": t.to_public(),
-        "project": _project_payload(t.project_id),
-        "changed_fields": ["assignee"],
-    })
+    await emit_event(
+        "task_updated",
+        {
+            "task": t.to_public(),
+            "project": _project_payload(t.project_id),
+            "changed_fields": ["assignee"],
+        },
+    )
     return t.to_public()
 
 
@@ -824,11 +861,14 @@ async def add_comment(task_id: str, req: CommentRequest) -> dict[str, Any]:
         raise HTTPException(404, f"task {task_id} not found")
     t = _store.get_task(task_id)
     if t:
-        await emit_event("task_commented", {
-            "task": t.to_public(),
-            "project": _project_payload(t.project_id),
-            "comment": req.text,
-        })
+        await emit_event(
+            "task_commented",
+            {
+                "task": t.to_public(),
+                "project": _project_payload(t.project_id),
+                "comment": req.text,
+            },
+        )
     return {"ok": True}
 
 
@@ -840,12 +880,88 @@ def add_link(task_id: str, req: LinkRequest) -> dict[str, Any]:
     return {"ok": True}
 
 
-@app.post("/api/tasks/{task_id}/blockers")
-def set_blockers(task_id: str, req: BlockersRequest) -> dict[str, Any]:
-    _store.set_blockers(task_id, req.blocker_ids)
-    return {"ok": True, "blockers": req.blocker_ids}
+# Agent claim / chat / runs (per-task driver plumbing)
+# ---------------------------------------------------------------------------
 
 
+@app.post("/api/tasks/{task_id}/claim")
+async def claim_task(task_id: str, req: ClaimRequest) -> dict[str, Any]:
+    """Atomic claim: assignee=agent:<role> + approved → in_progress.
+
+    History-recorded; idempotent for a re-claim by the same assignee.
+    Emits task_moved so the board/SSE stay current.
+    """
+    if not req.assignee.strip():
+        raise HTTPException(400, "assignee required")
+    pre = _store.get_task(task_id)
+    if pre is None:
+        raise HTTPException(404, f"task {task_id} not found")
+    try:
+        t = _store.claim_task(task_id, req.assignee, actor=_actor())
+    except KeyError:
+        raise HTTPException(404, f"task {task_id} not found")
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    if pre.status != t.status or pre.assignee != t.assignee:
+        payload = {
+            "task": t.to_public(),
+            "project": _project_payload(t.project_id),
+            "from_status": pre.status,
+            "to_status": t.status,
+        }
+        await emit_event("task_moved", payload)
+        emit_rule_event("task_moved", payload)
+    return t.to_public()
+
+
+@app.get("/api/tasks/{task_id}/chat")
+def get_chat(task_id: str) -> dict[str, Any]:
+    if _store.get_task(task_id) is None:
+        raise HTTPException(404, f"task {task_id} not found")
+    return {"task_id": task_id, "messages": _store.get_chat(task_id)}
+
+
+@app.post("/api/tasks/{task_id}/chat", status_code=201)
+async def add_chat_message(task_id: str, req: ChatMessageRequest) -> dict[str, Any]:
+    try:
+        msg = _store.add_chat_message(task_id, req.role, req.content)
+    except KeyError:
+        raise HTTPException(404, f"task {task_id} not found")
+    return msg
+
+
+@app.get("/api/tasks/{task_id}/runs")
+def get_run(task_id: str) -> dict[str, Any]:
+    if _store.get_task(task_id) is None:
+        raise HTTPException(404, f"task {task_id} not found")
+    run = _store.get_run(task_id)
+    return {"task_id": task_id, "run": run}
+
+
+@app.post("/api/tasks/{task_id}/runs")
+def register_run(task_id: str, req: RunRequest) -> dict[str, Any]:
+    """Upsert the task_runs row (driver registers at start and on exit)."""
+    fields = {
+        "pid": req.pid,
+        "started_at": req.started_at,
+        "ended_at": req.ended_at,
+        "model": req.model,
+        "role": req.role,
+        "status": req.status,
+        "tokens_used": req.tokens_used,
+        "control_port": req.control_port,
+    }
+    try:
+        run = _store.register_run(task_id, **fields)
+    except KeyError:
+        raise HTTPException(404, f"task {task_id} not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"task_id": task_id, "run": run}
+
+
+# ---------------------------------------------------------------------------
+# Agent log streaming (SSE)
 # ---------------------------------------------------------------------------
 # Agent log streaming (SSE)
 # ---------------------------------------------------------------------------
@@ -958,11 +1074,13 @@ def _resolve_claude_bin() -> str | None:
     if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
         return env_bin
     # widen PATH: a launchd process may have a narrow PATH
-    extra = ":".join([
-        os.path.expanduser("~/.local/bin"),
-        os.path.expanduser("~/.npm-global/bin"),
-        "/opt/homebrew/bin",
-    ])
+    extra = ":".join(
+        [
+            os.path.expanduser("~/.local/bin"),
+            os.path.expanduser("~/.npm-global/bin"),
+            "/opt/homebrew/bin",
+        ]
+    )
     candidates = (extra + ":" + os.environ.get("PATH", "")).split(":")
     for d in candidates:
         if not d:
@@ -980,9 +1098,7 @@ def _resolve_claude_bin() -> str | None:
             except OSError:
                 versions = []
             for v in versions:
-                cand = os.path.join(
-                    mac_root, v, "claude.app/Contents/MacOS/claude"
-                )
+                cand = os.path.join(mac_root, v, "claude.app/Contents/MacOS/claude")
                 if os.path.isfile(cand) and os.access(cand, os.X_OK):
                     return cand
     return None
@@ -1000,7 +1116,9 @@ async def claude_auth_status() -> dict[str, Any]:
         return {"available": False, "reason": "claude binary not found"}
     try:
         proc = await asyncio.create_subprocess_exec(
-            bin_, "auth", "status",
+            bin_,
+            "auth",
+            "status",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1011,7 +1129,12 @@ async def claude_auth_status() -> dict[str, Any]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return {"available": True, "loggedIn": False, "reason": "unparseable", "raw": text[:200]}
+        return {
+            "available": True,
+            "loggedIn": False,
+            "reason": "unparseable",
+            "raw": text[:200],
+        }
     return {
         "available": True,
         "loggedIn": bool(data.get("loggedIn", False)),
@@ -1038,8 +1161,12 @@ async def claude_auth_login() -> dict[str, Any]:
     log_path = log_dir / "claude-auth-login.log"
     f = open(log_path, "ab")
     proc = await asyncio.create_subprocess_exec(
-        bin_, "auth", "login", "--claudeai",
-        stdout=f, stderr=asyncio.subprocess.STDOUT,
+        bin_,
+        "auth",
+        "login",
+        "--claudeai",
+        stdout=f,
+        stderr=asyncio.subprocess.STDOUT,
     )
     return {
         "ok": True,
@@ -1068,8 +1195,12 @@ async def pick_folder() -> dict[str, Any]:
                 "Native picker requires 'zenity' on Linux. "
                 "Enter the path manually or install zenity.",
             )
-        cmd = ["zenity", "--file-selection", "--directory",
-               "--title=Choose the project directory"]
+        cmd = [
+            "zenity",
+            "--file-selection",
+            "--directory",
+            "--title=Choose the project directory",
+        ]
     elif sys.platform == "win32":
         ps_script = (
             "Add-Type -AssemblyName System.Windows.Forms; "

@@ -14,6 +14,7 @@ Public API:
     Store.set_blockers(task_id, blocker_ids)
     Store.snapshot()  -> dict (for JSON snapshots)
 """
+
 from __future__ import annotations
 
 import json
@@ -48,15 +49,15 @@ STATUSES: list[str] = [
 def status_meta() -> list[dict[str, str]]:
     """Column metadata for the UI (label + cssClass)."""
     return [
-        {"id": "backlog",     "title": "Backlog",      "owner": "user"},
-        {"id": "approved",    "title": "Approved",     "owner": "agent"},
-        {"id": "analyst",     "title": "Analyst",      "owner": "agent"},
-        {"id": "in_progress", "title": "In progress",  "owner": "agent"},
-        {"id": "testing",     "title": "Testing",      "owner": "agent"},
-        {"id": "uat",         "title": "UAT",          "owner": "user"},
-        {"id": "done",        "title": "Done",         "owner": "user"},
-        {"id": "blocked",     "title": "Blocked",      "owner": "any"},
-        {"id": "cancelled",   "title": "Cancelled",    "owner": "user"},
+        {"id": "backlog", "title": "Backlog", "owner": "user"},
+        {"id": "approved", "title": "Approved", "owner": "agent"},
+        {"id": "analyst", "title": "Analyst", "owner": "agent"},
+        {"id": "in_progress", "title": "In progress", "owner": "agent"},
+        {"id": "testing", "title": "Testing", "owner": "agent"},
+        {"id": "uat", "title": "UAT", "owner": "user"},
+        {"id": "done", "title": "Done", "owner": "user"},
+        {"id": "blocked", "title": "Blocked", "owner": "any"},
+        {"id": "cancelled", "title": "Cancelled", "owner": "user"},
     ]
 
 
@@ -183,7 +184,9 @@ class Store:
 
     def _migrate_v5(self) -> None:
         """v4 → v5: projects.model TEXT (omp model override)."""
-        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()}
+        cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
         if "model" not in cols:
             self._conn.execute("ALTER TABLE projects ADD COLUMN model TEXT")
         row = self._conn.execute(
@@ -191,6 +194,7 @@ class Store:
         ).fetchone()
         if row and int(row["value"]) < 5:
             self._conn.execute("UPDATE meta SET value='5' WHERE key='schema_version'")
+
     def _migrate_v6(self) -> None:
         """v5 → v6: tasks.parent_id + tasks.kind (Epic->Story->Ticket
         hierarchy) and task_chat/task_runs tables (created via schema.sql;
@@ -228,7 +232,9 @@ class Store:
         Idempotent: checks PRAGMA table_info before running ALTER; the table
         is created via schema.sql and here for older databases.
         """
-        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()}
+        cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
         if "code" not in cols:
             self._conn.execute("ALTER TABLE projects ADD COLUMN code TEXT")
         self._conn.execute(
@@ -253,7 +259,9 @@ class Store:
 
     def _migrate_v3(self) -> None:
         """v2 → v3: projects.path TEXT (Claude Code project directory)."""
-        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()}
+        cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
         if "path" not in cols:
             self._conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
         row = self._conn.execute(
@@ -303,9 +311,7 @@ class Store:
                 (default_id, default_name, default_color, default_icon, _now()),
             )
         if version < 2:
-            self._conn.execute(
-                "UPDATE meta SET value='2' WHERE key='schema_version'"
-            )
+            self._conn.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
 
     # ------------------------------------------------------------------
     # ID generation
@@ -588,7 +594,8 @@ class Store:
             self._conn.execute("BEGIN")
             try:
                 row = self._conn.execute(
-                    "SELECT assignee, status, project_id FROM tasks WHERE id=?", (task_id,)
+                    "SELECT assignee, status, project_id FROM tasks WHERE id=?",
+                    (task_id,),
                 ).fetchone()
                 if not row:
                     raise KeyError(task_id)
@@ -626,6 +633,69 @@ class Store:
         assert t is not None
         return t
 
+    def claim_task(self, task_id: str, assignee: str, *, actor: str) -> Task:
+        """Atomic claim: assignee=agent:<role> + approved → in_progress.
+
+        History-recorded (move + assign rows in one transaction). Idempotent
+        for a re-claim by the same assignee on an already-claimed task;
+        raises RuntimeError when the task is owned by someone else or not in
+        ``approved``/``in_progress``.
+        """
+        ts = _now()
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                row = self._conn.execute(
+                    "SELECT assignee, status, project_id FROM tasks WHERE id=?",
+                    (task_id,),
+                ).fetchone()
+                if not row:
+                    raise KeyError(task_id)
+                if row["status"] not in ("approved", "in_progress"):
+                    raise RuntimeError(
+                        f"task {task_id} is in '{row['status']}', cannot claim"
+                    )
+                if row["assignee"] is not None and row["assignee"] != assignee:
+                    raise RuntimeError(
+                        f"task {task_id} already assigned to {row['assignee']}"
+                    )
+                if row["status"] == "in_progress" and row["assignee"] == assignee:
+                    self._conn.execute("COMMIT")
+                    t = self.get_task(task_id)
+                    assert t is not None
+                    return t
+                # append to the end of the in_progress column (per project)
+                r2 = self._conn.execute(
+                    "SELECT COALESCE(MAX(column_order), -1) AS m FROM tasks "
+                    "WHERE status='in_progress' AND project_id=?",
+                    (row["project_id"],),
+                ).fetchone()
+                col_order = (r2["m"] + 1) if r2 else 0
+                self._conn.execute(
+                    """UPDATE tasks SET status='in_progress', assignee=?, moved_at=?,
+                       column_order=? WHERE id=?""",
+                    (assignee, ts, col_order, task_id),
+                )
+                self._conn.execute(
+                    """INSERT INTO task_history
+                       (task_id, ts, actor, action, from_status, to_status, comment)
+                       VALUES (?, ?, ?, 'move', 'approved', 'in_progress', 'claimed')""",
+                    (task_id, ts, actor),
+                )
+                self._conn.execute(
+                    """INSERT INTO task_history
+                       (task_id, ts, actor, action, from_status, to_status, comment)
+                       VALUES (?, ?, ?, 'assign', NULL, NULL, ?)""",
+                    (task_id, ts, actor, f"assignee → {assignee}"),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        t = self.get_task(task_id)
+        assert t is not None
+        return t
+
     def add_comment(self, task_id: str, text: str, *, actor: str) -> None:
         ts = _now()
         with self._lock:
@@ -640,6 +710,113 @@ class Store:
                    VALUES (?, ?, ?, 'comment', NULL, NULL, ?)""",
                 (task_id, ts, actor, text),
             )
+
+    def add_chat_message(self, task_id: str, role: str, content: str) -> dict[str, Any]:
+        """Append one message to task_chat (1-based per-task seq, ISO ts)."""
+        ts = _now()
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                row = self._conn.execute(
+                    "SELECT 1 FROM tasks WHERE id=?", (task_id,)
+                ).fetchone()
+                if not row:
+                    raise KeyError(task_id)
+                seq = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM task_chat WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()[0]
+                self._conn.execute(
+                    """INSERT INTO task_chat (task_id, seq, ts, role, content)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (task_id, seq, ts, role, content),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return {
+            "task_id": task_id,
+            "seq": seq,
+            "ts": ts,
+            "role": role,
+            "content": content,
+        }
+
+    def get_chat(self, task_id: str) -> list[dict[str, Any]]:
+        """task_chat rows for a task, ascending seq."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT task_id, seq, ts, role, content FROM task_chat "
+                "WHERE task_id=? ORDER BY seq",
+                (task_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def register_run(
+        self,
+        task_id: str,
+        *,
+        pid: int | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+        tokens_used: int | None = None,
+        control_port: int | None = None,
+    ) -> dict[str, Any]:
+        """Upsert a task_runs row: only the provided fields are written.
+
+        Called by the driver at start (pid/started_at/model/role/
+        control_port/status) and on exit (ended_at/status/tokens_used).
+        """
+        provided = {
+            k: v
+            for k, v in (
+                ("pid", pid),
+                ("started_at", started_at),
+                ("ended_at", ended_at),
+                ("model", model),
+                ("role", role),
+                ("status", status),
+                ("tokens_used", tokens_used),
+                ("control_port", control_port),
+            )
+            if v is not None
+        }
+        if not provided:
+            raise ValueError("register_run: at least one field required")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(task_id)
+            cols = ", ".join(provided)
+            ph = ", ".join("?" * len(provided))
+            sets = ", ".join(f"{k}=excluded.{k}" for k in provided)
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute(
+                    f"INSERT INTO task_runs (task_id, {cols}) VALUES (?, {ph}) "
+                    f"ON CONFLICT(task_id) DO UPDATE SET {sets}",
+                    (task_id, *provided.values()),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        run = self.get_run(task_id)
+        assert run is not None
+        return run
+
+    def get_run(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM task_runs WHERE task_id=?", (task_id,)
+            ).fetchone()
+        return dict(row) if row else None
 
     def add_link(self, task_id: str, type_: str, value: str) -> None:
         with self._lock:
@@ -794,7 +971,17 @@ class Store:
                     """INSERT INTO projects
                        (id, name, color, icon, sort_order, archived, path, model, code, created_at)
                        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
-                    (project_id, name, color, icon or name[:1].upper(), sort_order, path, model, code, ts),
+                    (
+                        project_id,
+                        name,
+                        color,
+                        icon or name[:1].upper(),
+                        sort_order,
+                        path,
+                        model,
+                        code,
+                        ts,
+                    ),
                 )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -820,8 +1007,12 @@ class Store:
         params: list[Any] = []
         # path is forwarded as-is (None means "leave alone", "" means "clear").
         for col, val in (
-            ("name", name), ("color", color), ("icon", icon),
-            ("sort_order", sort_order), ("path", path), ("model", model),
+            ("name", name),
+            ("color", color),
+            ("icon", icon),
+            ("sort_order", sort_order),
+            ("path", path),
+            ("model", model),
         ):
             if val is not None:
                 sets.append(f"{col} = ?")
@@ -1014,7 +1205,9 @@ class Store:
             created_at=row["created_at"],
             moved_at=row["moved_at"],
             column_order=row["column_order"],
-            project_id=row["project_id"] if "project_id" in row.keys() else DEFAULT_PROJECT_ID,
+            project_id=row["project_id"]
+            if "project_id" in row.keys()
+            else DEFAULT_PROJECT_ID,
             parent_id=row["parent_id"] if "parent_id" in row.keys() else None,
             kind=row["kind"] if "kind" in row.keys() else "task",
         )
