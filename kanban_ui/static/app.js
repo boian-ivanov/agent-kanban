@@ -27,6 +27,7 @@ const LS = {
   THEME: "kb.theme",
   PROFILE: "kb.profile",
   LAST_PROJECT: "kb.lastProject",
+  GROUP_EPICS: "kb.groupEpics",
 };
 
 const PROFILES = ["standard", "cyberpunk", "horizon"];
@@ -50,6 +51,7 @@ const state = {
   sidebarCollapsed: localStorage.getItem(LS.SIDEBAR) === "collapsed",
   collapsedCols: _loadJSON(LS.COLLAPSED_COLS),
   expandedCols:  _loadJSON(LS.EXPANDED_COLS),
+  groupEpics: localStorage.getItem(LS.GROUP_EPICS) === "1",
   isDragging: false,
 };
 
@@ -210,15 +212,37 @@ function render(board) {
     `;
     root.appendChild(colEl);
     const listEl = colEl.querySelector(".col__list");
-    for (const t of list) {
-      const card = cardEl(t);
-      if (!matchesFilters(t)) card.classList.add("is-hidden");
+    const items = state.groupEpics ? epicGrouping(list) : list.map(t => ({ type: "card", task: t, epicId: null }));
+    for (const it of items) {
+      if (it.type === "head") {
+        const head = document.createElement("div");
+        head.className = "epic-group";
+        head.dataset.epicId = it.epic.id;
+        head.innerHTML = `
+          <button class="epic-group__head" title="${escapeHTML(it.epic.title)}">
+            <span class="epic-group__mark">EPIC</span>
+            <span class="epic-group__id">${escapeHTML(it.epic.id)}</span>
+            <span class="epic-group__title">${escapeHTML(it.epic.title)}</span>
+            <span class="epic-group__count">${it.count}</span>
+          </button>`;
+        head.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (state.isDragging) return;
+          openTaskModal(it.epic.id);
+        });
+        listEl.appendChild(head);
+        continue;
+      }
+      const card = cardEl(it.task);
+      if (it.epicId) card.dataset.epicGroup = it.epicId;
+      if (!matchesFilters(it.task)) card.classList.add("is-hidden");
       else visible++;
       listEl.appendChild(card);
     }
     Sortable.create(listEl, {
       group: "tasks",
       animation: 140,
+      draggable: ".card",
       ghostClass: "sortable-ghost",
       chosenClass: "sortable-chosen",
       dragClass: "sortable-drag",
@@ -243,6 +267,8 @@ function render(board) {
   }
   // density
   root.classList.toggle("is-compact", state.density === "compact");
+  const groupBtn = $("#btn-group-epics");
+  if (groupBtn) groupBtn.classList.toggle("is-active", state.groupEpics);
   // stats
   const filterLabel = (state.search || state.filters.size > 0)
     ? `${visible} / ${total}` : `${total}`;
@@ -269,6 +295,61 @@ function cardEl(t) {
     openTaskModal(t.id);
   });
   return div;
+}
+
+// ----------------------------------------------------------- Epic grouping
+
+// Root epic of a task's ancestor chain (walks parent_id through the full
+// board task set), or null when the task is top-level / not under an epic.
+function rootEpic(t, all) {
+  let cur = t;
+  let guard = 0;
+  while (cur && cur.parent_id && guard++ < 20) {
+    const p = all.get(cur.parent_id);
+    if (!p) break;
+    if (p.kind === "epic") return p;
+    cur = p;
+  }
+  return null;
+}
+
+// Column render items when "group by epic" is on: epic group headers
+// followed by their descendant cards (first-seen order), then ungrouped
+// cards in board order. Epic cards themselves are ungrouped cards.
+function epicGrouping(list) {
+  const all = new Map();
+  for (const col of state.board.columns) {
+    for (const t of state.board.tasks[col.id] || []) all.set(t.id, t);
+  }
+  const groups = [];
+  const idx = new Map();
+  const ungrouped = [];
+  for (const t of list) {
+    if (t.kind === "epic") { ungrouped.push(t); continue; }
+    const epic = rootEpic(t, all);
+    if (epic) {
+      if (!idx.has(epic.id)) {
+        idx.set(epic.id, groups.length);
+        groups.push({ epic, children: [] });
+      }
+      groups[idx.get(epic.id)].children.push(t);
+    } else {
+      ungrouped.push(t);
+    }
+  }
+  const items = [];
+  for (const g of groups) {
+    items.push({ type: "head", epic: g.epic, count: g.children.length });
+    for (const t of g.children) items.push({ type: "card", task: t, epicId: g.epic.id });
+  }
+  for (const t of ungrouped) items.push({ type: "card", task: t, epicId: null });
+  return items;
+}
+
+function toggleEpicGrouping() {
+  state.groupEpics = !state.groupEpics;
+  localStorage.setItem(LS.GROUP_EPICS, state.groupEpics ? "1" : "0");
+  loadBoard();
 }
 
 // ----------------------------------------------------------- Filters
@@ -311,6 +392,15 @@ function applyFilters() {
       } else {
         card.classList.add("is-hidden");
       }
+    }
+    // epic group headers hide when none of their cards match
+    if (state.groupEpics) {
+      $$(`.col[data-status="${col.id}"] .epic-group`).forEach(head => {
+        const any = Array.from(head.parentElement.querySelectorAll(
+          `.card[data-epic-group="${head.dataset.epicId}"]`))
+          .some(c => !c.classList.contains("is-hidden"));
+        head.classList.toggle("is-hidden", !any);
+      });
     }
   }
   const filterLabel = (state.search || state.filters.size > 0)
@@ -439,6 +529,11 @@ async function openTaskModal(taskId) {
   $("#modal").dataset.taskId = t.id;
   $("#m-id").textContent = t.id;
   $("#m-status").textContent = STATUS_TITLE[t.status] || t.status;
+  renderBreadcrumb(t);
+  // epic/story can spawn children (story under epic, task under story)
+  const childBtn = $("#btn-create-child");
+  childBtn.hidden = !(t.kind === "epic" || t.kind === "story");
+  $("#modal").dataset.kind = t.kind || "task";
   $("#m-title").value = t.title || "";
   $("#m-priority").value = t.priority || "normal";
   $("#m-size").value = t.size || "M";
@@ -491,6 +586,39 @@ async function openTaskModal(taskId) {
   }
 
   $("#modal").hidden = false;
+}
+
+function renderBreadcrumb(t) {
+  const el = $("#m-breadcrumb");
+  const chain = [...(t.ancestors || []), { id: t.id, title: t.title, kind: t.kind || "task" }];
+  if (chain.length < 2) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = "";
+  chain.forEach((a, i) => {
+    if (i > 0) el.appendChild(document.createTextNode("›"));
+    const span = document.createElement("span");
+    span.className = "breadcrumb__item";
+    if (i < chain.length - 1) span.classList.add("is-link");
+    span.title = a.title || "";
+    span.innerHTML = `<span class="breadcrumb__kind">${escapeHTML((a.kind || "task").toUpperCase())}</span> ${escapeHTML(a.id)}`;
+    if (i < chain.length - 1) {
+      span.addEventListener("click", () => openTaskModal(a.id));
+    }
+    el.appendChild(span);
+  });
+}
+
+// "＋ Child" in the task modal: open the new-task modal pre-pinned to the
+// current epic/story (kind derived: epic → story, story → task).
+function createChild() {
+  const taskId = $("#modal").dataset.taskId;
+  const kind = $("#modal").dataset.kind;
+  if (!taskId || !(kind === "epic" || kind === "story")) return;
+  openNewModal({ parentId: taskId, kind: kind === "epic" ? "story" : "task" });
 }
 
 function renderLinks(links) {
@@ -588,9 +716,43 @@ async function addComment() {
   }
 }
 
-// ----------------------------------------------------------- New task
+// Populate the parent picker for the given kind. story → epics only;
+// task → epics + stories; epic → hidden (epics are top-level).
+function populateParentSelect(kind, selectedId = "") {
+  const sel = $("#n-parent");
+  sel.innerHTML = "";
+  const want = kind === "story" ? ["epic"] : kind === "task" ? ["epic", "story"] : [];
+  const candidates = [];
+  for (const col of state.board.columns) {
+    for (const t of state.board.tasks[col.id] || []) {
+      if (want.includes(t.kind)) candidates.push(t);
+    }
+  }
+  if (candidates.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = kind === "story" ? "No epics yet — create one first" : "No epic/story yet — create one first";
+    sel.appendChild(opt);
+    return;
+  }
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = kind === "story" ? "— Epic —" : "— Epic or story —";
+  sel.appendChild(ph);
+  for (const t of candidates) {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = `${t.id} — ${t.title}`;
+    if (t.id === selectedId) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
 
-function openNewModal() {
+// opts.parentId — pre-pinned parent (create-child from the task modal):
+// kind is locked to the derived child kind and the parent picker is hidden.
+function openNewModal(opts = {}) {
+  const parentId = opts.parentId || "";
+  const kind = opts.kind || "task";
   $("#n-title").value = "";
   $("#n-description").value = "";
   $("#n-acceptance").value = "";
@@ -598,12 +760,20 @@ function openNewModal() {
   $("#n-size").value = "M";
   $("#n-status").value = "backlog";
   $("#n-proj-chip").textContent = state.project ? state.project.name : state.projectId;
+  $("#n-kind").value = kind;
+  $("#n-kind").disabled = Boolean(parentId);
+  populateParentSelect(kind, parentId);
+  $("#n-parent-field").hidden = kind === "epic" || Boolean(parentId);
+  $("#new-modal").dataset.parentId = parentId;
   $("#new-modal").hidden = false;
   $("#n-title").focus();
 }
 
 function closeNewModal() {
   $("#new-modal").hidden = true;
+  delete $("#new-modal").dataset.parentId;
+  $("#n-kind").disabled = false;
+  $("#n-parent-field").hidden = false;
 }
 
 async function createTask() {
@@ -620,6 +790,8 @@ async function createTask() {
     size: $("#n-size").value,
     status: $("#n-status").value,
     project_id: state.projectId,
+    kind: $("#n-kind").value,
+    parent_id: $("#new-modal").dataset.parentId || $("#n-parent").value || null,
   };
   try {
     const t = await api("POST", `/api/tasks`, payload);
@@ -1183,11 +1355,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#btn-save").addEventListener("click", saveModal);
   $("#btn-add-link").addEventListener("click", addLink);
   $("#btn-add-comment").addEventListener("click", addComment);
-  $("#btn-new").addEventListener("click", openNewModal);
+  $("#btn-create-child").addEventListener("click", createChild);
+  $("#n-kind").addEventListener("change", () => {
+    const kind = $("#n-kind").value;
+    populateParentSelect(kind, "");
+    $("#n-parent-field").hidden = kind === "epic";
+  });
+  $("#btn-new").addEventListener("click", () => openNewModal());
   $("#btn-create").addEventListener("click", createTask);
   $("#btn-refresh").addEventListener("click", () => { loadBoard(); loadProjects(); });
   $("#btn-snapshot").addEventListener("click", snapshot);
-  $("#btn-density").addEventListener("click", toggleDensity);
+  $("#btn-group-epics").addEventListener("click", toggleEpicGrouping);
   $("#btn-theme").addEventListener("click", toggleTheme);
   $("#btn-profile").addEventListener("click", toggleProfile);
   $("#btn-claude-auth").addEventListener("click", clickClaudeAuth);

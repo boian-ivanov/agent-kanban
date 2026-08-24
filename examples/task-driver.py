@@ -15,7 +15,10 @@ Flow:
   3. run the omp session (``--mode rpc``; initial prompt + follow-up steers
      are sent as JSON-line ``prompt`` commands) for the task prompt
      (worktree from agents.json, overridable per project via the board's
-     project.path / project.model),
+     project.path / project.model); the initial prompt injects the
+     GET /api/tasks/{id}/context bundle (T-313) — task fields, ancestor
+     chain (epic description / story acceptance), recent comments, shared
+     agent constraints — replacing the old hardcoded protocol text,
   4. write each complete assistant message to task_chat via
      POST /api/tasks/{id}/chat (per message — not per raw text delta), while
      still archiving the raw token stream to
@@ -273,6 +276,49 @@ def _message_text(message: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _render_context(ctx: dict[str, Any], task_id: str) -> str:
+    """Render a GET /api/tasks/{id}/context bundle (T-313) as prompt text:
+    task fields, ancestor chain (epic description / story acceptance), recent
+    comments. The bundle also carries the shared agent constraints, which the
+    caller renders into the prompt separately."""
+    t = ctx.get("task") or {}
+    lines: list[str] = []
+    lines.append(
+        f"{t.get('kind', 'task')} {t.get('id', task_id)} — {t.get('title', '')}"
+    )
+    lines.append(
+        f"status: {t.get('status', '?')} · priority: {t.get('priority', '?')} "
+        f"· size: {t.get('size', '?')}"
+    )
+    if t.get("assignee"):
+        lines.append(f"assignee: {t['assignee']}")
+    for label, key in (
+        ("Description", "description"),
+        ("Acceptance criteria", "acceptance"),
+    ):
+        if t.get(key):
+            lines.append(f"\n{label}:\n{t[key]}")
+    if t.get("external_blocker"):
+        lines.append(f"\nExternal blocker: {t['external_blocker']}")
+    ancestors = ctx.get("ancestors") or []
+    if ancestors:
+        lines.append("\nHierarchy (root first):")
+        for a in ancestors:
+            lines.append(f"- {a.get('kind', 'task')} {a['id']} — {a.get('title', '')}")
+            if a.get("description"):
+                lines.append(f"  description: {a['description']}")
+            if a.get("acceptance"):
+                lines.append(f"  acceptance: {a['acceptance']}")
+    comments = ctx.get("comments") or []
+    if comments:
+        lines.append("\nRecent comments:")
+        for c in comments:
+            lines.append(
+                f"- [{c.get('ts', '')}] {c.get('actor', '')}: {c.get('text', '')}"
+            )
+    return "\n".join(lines)
+
+
 def _interrupt(proc: subprocess.Popen) -> None:
     """SIGINT the omp session and make sure it is gone (no orphans)."""
     if proc.poll() is not None:
@@ -348,7 +394,7 @@ def main() -> int:
     model = cfg.get("model") or "opencode-go/deepseek-v4-flash"
     worktree = cfg.get("worktree") or str(REPO_ROOT)
     role_prompt = cfg.get("prompt") or ""
-    constraints = "\n".join(f"- {c}" for c in agents.get("constraints", []))
+
     # T-312 budgets: CLI > role config (agents.json) > D5-locked defaults.
     # 0/None disables the respective limit.
     cfg_max_tokens = cfg.get("max_tokens")
@@ -427,25 +473,37 @@ def main() -> int:
     }
     control.set_budget(budget_state)
 
+    # --- task context bundle (T-313): task fields + ancestors + comments +
+    # constraints in one call — replaces the hardcoded protocol text below.
+    # Older boards without /context fall back to the local agents.json
+    # constraints (no bundle text). ---
+    context_text = ""
+    constraints = "\n".join(f"- {c}" for c in agents.get("constraints", []))
+    try:
+        context = api_json(args.base_url, "GET", f"/api/tasks/{args.task_id}/context")
+    except ApiError as e:
+        log_line(f"context bundle unavailable, falling back: {e}")
+    else:
+        context_text = _render_context(context, args.task_id)
+        if context.get("constraints"):
+            constraints = "\n".join(f"- {c}" for c in context["constraints"])
+
     prompt_text = (
         f"You are a kanban worker agent dispatched by the local agent-kanban "
         f"board (project {args.project_id}). Task: {args.task_id} (role: {role}).\n\n"
         f"{role_prompt}\n\n"
+        f"Task context (from GET /api/tasks/{args.task_id}/context):\n"
+        f"{context_text}\n\n"
         f"Constraints:\n{constraints}\n\n"
         f"Board protocol:\n"
-        f"1. Read the task (title, description, acceptance): "
-        f"curl -s {args.base_url}/api/tasks/{args.task_id}\n"
-        f"2. Mark it in progress: curl -s -X POST "
-        f"{args.base_url}/api/tasks/{args.task_id}/move "
-        f"-H 'Content-Type: application/json' -d '{{\"to_status\":\"in_progress\"}}'\n"
-        f"3. Do the work in the current directory.\n"
-        f"4. Post a summary comment: curl -s -X POST "
+        f"1. Do the work described in the task context in the current directory.\n"
+        f"2. Post a summary comment: curl -s -X POST "
         f"{args.base_url}/api/tasks/{args.task_id}/comment "
         f"-H 'Content-Type: application/json' -d '{{\"text\":\"<summary>\"}}'\n"
-        f"5. Move the task to testing: curl -s -X POST "
+        f"3. Move the task to testing: curl -s -X POST "
         f"{args.base_url}/api/tasks/{args.task_id}/move "
         f"-H 'Content-Type: application/json' -d '{{\"to_status\":\"testing\"}}'\n\n"
-        f"The task content defines the actual work; the API calls above are the "
+        f"The task context above defines the actual work; the API calls are the "
         f"board protocol. Reply with a brief summary of what you did."
     )
 

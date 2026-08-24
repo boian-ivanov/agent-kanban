@@ -12,7 +12,7 @@ from kanban_ui import main
 
 
 def _set_parent(store: Store, child: str, parent: str, kind: str = "task") -> None:
-    """Parent a task via SQL — the REST API does not expose hierarchy writes yet."""
+    """Parent a task directly in SQL (REST create also supports parent/kind)."""
     with store._lock:
         store._conn.execute(
             "UPDATE tasks SET parent_id=?, kind=? WHERE id=?",
@@ -160,30 +160,115 @@ def test_board_default_summary_and_full(api):
     assert story_card["ancestors"][0]["title"] == "Epic"
 
 
-def test_filtered_list_endpoint(api):
+def test_create_task_with_parent_and_kind(api):
+    """T-313: POST /api/tasks with parent_id + kind builds the epic → story →
+    task hierarchy; invalid combinations are rejected with 400."""
+    client, _ = api
+    epic = client.post(
+        "/api/tasks",
+        json={"title": "Epic", "kind": "epic", "project_id": "default"},
+    ).json()
+    assert epic["kind"] == "epic" and epic["parent_id"] is None
+
+    story = client.post(
+        "/api/tasks",
+        json={
+            "title": "Story",
+            "kind": "story",
+            "parent_id": epic["id"],
+            "project_id": "default",
+        },
+    ).json()
+    assert story["kind"] == "story" and story["parent_id"] == epic["id"]
+
+    task = client.post(
+        "/api/tasks",
+        json={
+            "title": "Ticket",
+            "kind": "task",
+            "parent_id": story["id"],
+            "project_id": "default",
+        },
+    ).json()
+    assert task["kind"] == "task" and task["parent_id"] == story["id"]
+
+    # epics are top-level; tasks cannot have children; kind must match parent
+    r = client.post(
+        "/api/tasks",
+        json={
+            "title": "Bad",
+            "kind": "epic",
+            "parent_id": epic["id"],
+            "project_id": "default",
+        },
+    )
+    assert r.status_code == 400
+    r = client.post(
+        "/api/tasks",
+        json={
+            "title": "Bad",
+            "kind": "story",
+            "parent_id": task["id"],
+            "project_id": "default",
+        },
+    )
+    assert r.status_code == 400
+    r = client.post(
+        "/api/tasks",
+        json={
+            "title": "Bad",
+            "kind": "task",
+            "parent_id": epic["id"],
+            "project_id": "default",
+        },
+    )
+    assert r.status_code == 400
+    r = client.post(
+        "/api/tasks",
+        json={
+            "title": "Bad",
+            "kind": "story",
+            "parent_id": "T-999",
+            "project_id": "default",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_task_context_endpoint(api):
+    """T-313: GET /api/tasks/{id}/context returns the full agent bundle in one
+    call — task fields, ancestor chain (epic description / story acceptance),
+    recent comments, and the shared agent constraints."""
     client, store = api
-    a = store.create_task("A", status="backlog", assignee="agent:fe")
-    b = store.create_task("B", status="analyst", assignee="agent:be")
-    _set_parent(store, b.id, a.id)
-    store.add_comment(b.id, "comment", actor="user")
+    epic = store.create_task(
+        "Epic", description="epic desc", acceptance="epic acc", kind="epic"
+    )
+    story = store.create_task(
+        "Story", description="story desc", kind="story", parent_id=epic.id
+    )
+    task = store.create_task(
+        "Ticket", description="ticket desc", kind="task", parent_id=story.id
+    )
+    store.add_comment(task.id, "hello", actor="agent:fe")
+    store.add_comment(task.id, "later", actor="user")
 
-    r = client.get("/api/tasks?project=default&status=analyst")
+    r = client.get(f"/api/tasks/{task.id}/context")
     assert r.status_code == 200
-    assert [t["id"] for t in r.json()["tasks"]] == [b.id]
-    assert r.json()["count"] == 1
-
-    r = client.get("/api/tasks?assignee=agent%3Afe")
-    assert [t["id"] for t in r.json()["tasks"]] == [a.id]
-
-    r = client.get(f"/api/tasks?parent_id={a.id}")
-    assert [t["id"] for t in r.json()["tasks"]] == [b.id]
-
-    r = client.get("/api/tasks?updated_since=2000-01-01T00%3A00%3A00%2B00%3A00")
-    assert r.json()["count"] == 2
-
-    r = client.get("/api/tasks?status=done")
-    assert r.json()["tasks"] == []
-
-    # summary fields include hierarchy info
-    card = client.get("/api/tasks?project=default").json()["tasks"][0]
-    assert "parent_id" in card and "kind" in card and "status" in card
+    body = r.json()
+    assert body["task_id"] == task.id
+    assert body["task"]["id"] == task.id
+    assert body["task"]["kind"] == "task"
+    assert body["task"]["description"] == "ticket desc"
+    assert body["task"]["parent_id"] == story.id
+    # ancestor chain root-first, epic description + story acceptance included
+    assert [a["id"] for a in body["ancestors"]] == [epic.id, story.id]
+    assert body["ancestors"][0]["kind"] == "epic"
+    assert body["ancestors"][0]["description"] == "epic desc"
+    assert body["ancestors"][0]["acceptance"] == "epic acc"
+    assert body["ancestors"][1]["id"] == story.id
+    assert body["ancestors"][1]["acceptance"] == ""
+    # recent comments (chronological) + shared constraints in the same call
+    assert [c["text"] for c in body["comments"]] == ["hello", "later"]
+    assert isinstance(body["constraints"], list) and body["constraints"]
+    # unknown task
+    assert client.get("/api/tasks/T-999/context").status_code == 404

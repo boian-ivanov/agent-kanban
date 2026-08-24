@@ -459,14 +459,35 @@ class Store:
         links: list[dict[str, str]] | None = None,
         task_id: str | None = None,
         project_id: str = DEFAULT_PROJECT_ID,
+        parent_id: str | None = None,
+        kind: str = "task",
     ) -> Task:
         if status not in STATUSES:
             raise ValueError(f"unknown status: {status}")
+        if kind not in ("epic", "story", "task"):
+            raise ValueError(f"unknown kind: {kind}")
+        if kind == "epic" and parent_id is not None:
+            raise ValueError("epics are top-level — they cannot have a parent")
+        if parent_id is not None:
+            parent = self.get_task(parent_id)
+            if parent is None:
+                raise ValueError(f"unknown parent: {parent_id}")
+            if parent.project_id != project_id:
+                raise ValueError("parent must belong to the same project")
+            expected = {"epic": "story", "story": "task"}.get(parent.kind)
+            if expected is None:
+                raise ValueError("tasks cannot have children")
+            if kind != expected:
+                raise ValueError(
+                    f"child of a {parent.kind} must be kind={expected!r}, got {kind!r}"
+                )
         ts = _now()
         with self._lock:
             self._conn.execute("BEGIN")
             try:
                 tid = task_id or self._next_id(project_id)
+                if parent_id is not None and tid == parent_id:
+                    raise ValueError("a task cannot be its own parent")
                 # column_order — last in the column + 1 (per project)
                 row = self._conn.execute(
                     "SELECT COALESCE(MAX(column_order), -1) AS m FROM tasks "
@@ -478,8 +499,9 @@ class Store:
                     """
                     INSERT INTO tasks (id, title, status, priority, size, assignee,
                                         description, acceptance, external_blocker,
-                                        created_at, moved_at, column_order, project_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        created_at, moved_at, column_order, project_id,
+                                        parent_id, kind)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         tid,
@@ -495,6 +517,8 @@ class Store:
                         ts,
                         col_order,
                         project_id,
+                        parent_id,
+                        kind,
                     ),
                 )
                 if links:

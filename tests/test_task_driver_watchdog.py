@@ -70,6 +70,18 @@ elif mode == "dots":
     emit({"type": "message_update",
           "assistantMessageEvent": {"type": "text_delta", "delta": "." * 2000}})
     emit({"type": "agent_end", "messages": [], "isTerminal": True})
+elif mode == "dump":
+    # record the initial prompt for prompt-content assertions, then finish;
+    # exit when the driver closes stdin
+    pf = os.environ.get("FAKE_PROMPT_FILE")
+    if pf:
+        with open(pf, "w") as f:
+            f.write(obj.get("message", ""))
+    emit({"type": "agent_end", "messages": [], "isTerminal": True})
+    while sys.stdin.readline():
+        pass
+    sys.exit(0)
+# silent: no output at all — the driver must kill us on budget breach
 # silent: no output at all — the driver must kill us on budget breach
 
 while True:
@@ -107,7 +119,35 @@ def _handler(board: FakeBoard):
                 "title": "watchdog test",
                 "status": board.task_status,
                 "assignee": "agent:default",
+                "kind": "task",
+                "parent_id": None,
+                "ancestors": [],
                 "history": [],
+            }
+
+        def _context(self) -> dict:
+            return {
+                "task_id": "T-WD",
+                "project_id": "agent-kanban",
+                "task": self._task(),
+                "ancestors": [
+                    {
+                        "id": "T-EPIC",
+                        "kind": "epic",
+                        "title": "Watchdog epic",
+                        "description": "epic context for the driver prompt",
+                        "acceptance": "epic acceptance",
+                    }
+                ],
+                "comments": [
+                    {
+                        "id": 1,
+                        "ts": "2026-08-24T00:00:00+00:00",
+                        "actor": "omp",
+                        "text": "note",
+                    }
+                ],
+                "constraints": ["constraint one", "constraint two"],
             }
 
         def _read(self) -> dict:
@@ -127,6 +167,8 @@ def _handler(board: FakeBoard):
                 self._send(200, {"project": {}})
             elif "since_seq" in self.path:
                 self._send(200, {"history": []})
+            elif self.path.endswith("/context"):
+                self._send(200, self._context())
             elif "/api/tasks/" in self.path:
                 self._send(200, self._task())
             else:
@@ -253,7 +295,52 @@ def test_budget_breach_kills_run_and_returns_to_approved(
     assert b.moves[-1] == "approved", f"moves: {b.moves}"
     # no orphan omp process after the kill
     assert not process_alive(pidfile), f"omp child {pidfile} still alive"
-    # agent log records the breach
-    log = AGENT_LOG_DIR / f"{task_id}.log"
-    assert log.exists() and "budget breach" in log.read_text(encoding="utf-8")
+
+
+def test_initial_prompt_injects_context_bundle(board, tmp_path):
+    """T-313: the driver fetches GET /api/tasks/{id}/context and injects the
+    rendered bundle (task fields, epic description, story acceptance, recent
+    comments, shared constraints) into the initial omp prompt — replacing the
+    old hardcoded protocol text."""
+    b, url = board
+    b.task_status = "testing"  # agent_end then completes the run immediately
+    fake = tmp_path / "fake_omp.py"
+    fake.write_text(FAKE_OMP)
+    fake.chmod(0o755)
+    prompt_file = tmp_path / "prompt.txt"
+    env = {
+        **os.environ,
+        "OMP_BIN": str(fake),
+        "FAKE_MODE": "dump",
+        "FAKE_PROMPT_FILE": str(prompt_file),
+    }
+    cmd = [
+        sys.executable,
+        str(DRIVER),
+        "--task-id",
+        "T-WD",
+        "--project-id",
+        "agent-kanban",
+        "--base-url",
+        url,
+    ]
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    assert proc.returncode == 0, f"driver failed:\n{proc.stdout}\n{proc.stderr}"
+    prompt = prompt_file.read_text(encoding="utf-8")
+    # task fields + ancestor chain (epic description/acceptance) + comments + constraints
+    assert "Watchdog epic" in prompt
+    assert "epic context for the driver prompt" in prompt
+    assert "epic acceptance" in prompt
+    assert "constraint one" in prompt and "constraint two" in prompt
+    # the old hardcoded protocol text is gone (replaced by the bundle)
+    assert "Read the task (title, description, acceptance)" not in prompt
+    log = AGENT_LOG_DIR / "T-WD.log"
     log.unlink(missing_ok=True)

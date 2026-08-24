@@ -160,6 +160,16 @@ class TaskCreate(BaseModel):
     assignee: str | None = None
     links: list[dict[str, str]] = Field(default_factory=list)
     project_id: str = DEFAULT_PROJECT_ID
+    parent_id: str | None = Field(
+        None,
+        description="parent task id — hierarchy: epic → story → task "
+        "(child kind is derived from the parent's kind)",
+    )
+    kind: str = Field(
+        "task",
+        description="task|story|epic — top-level kinds only; a parent forces "
+        "the matching child kind",
+    )
 
 
 class TaskUpdate(BaseModel):
@@ -336,6 +346,8 @@ def get_board(
                     "blockers": t.blockers,
                     "moved_at": t.moved_at,
                     "project_id": t.project_id,
+                    "parent_id": t.parent_id,
+                    "kind": t.kind,
                 }
             )
     return {
@@ -750,6 +762,57 @@ def get_task(
     return t.to_public()
 
 
+def _agents_constraints() -> list[str]:
+    """Shared agent constraints from examples/agents.json (same file the
+    task-driver reads for role config). Missing/unreadable -> []."""
+    try:
+        data = json.loads(
+            (ROOT / "examples" / "agents.json").read_text(encoding="utf-8")
+        )
+        return list(data.get("constraints") or [])
+    except (OSError, ValueError):
+        return []
+
+
+@app.get("/api/tasks/{task_id}/context")
+def task_context(task_id: str) -> dict[str, Any]:
+    """Agent context bundle for a task — everything a dispatched agent needs
+    in one call (T-313): task fields, the ancestor chain (epic description,
+    story acceptance), recent comments, and the shared agent constraints.
+    The per-task driver injects this into the omp prompt.
+    """
+    t = _store.get_task(task_id)
+    if not t:
+        raise HTTPException(404, f"task {task_id} not found")
+    comments = [
+        {"id": h.id, "ts": h.ts, "actor": h.actor, "text": h.comment}
+        for h in t.history
+        if h.action == "comment"
+    ]
+    return {
+        "task_id": t.id,
+        "project_id": t.project_id,
+        "task": {
+            "id": t.id,
+            "title": t.title,
+            "status": t.status,
+            "priority": t.priority,
+            "size": t.size,
+            "assignee": t.assignee,
+            "kind": t.kind,
+            "parent_id": t.parent_id,
+            "description": t.description,
+            "acceptance": t.acceptance,
+            "external_blocker": t.external_blocker,
+            "created_at": t.created_at,
+            "moved_at": t.moved_at,
+        },
+        "ancestors": t.ancestors,
+        "comments": comments[-20:],
+        "constraints": _agents_constraints(),
+    }
+
+
 def _project_payload(project_id: str | None) -> dict[str, Any] | None:
     if not project_id:
         return None
@@ -763,19 +826,24 @@ async def create_task(req: TaskCreate) -> dict[str, Any]:
         raise HTTPException(400, f"unknown status: {req.status}")
     if _store.get_project(req.project_id) is None:
         raise HTTPException(400, f"unknown project: {req.project_id}")
-    t = _store.create_task(
-        title=req.title,
-        description=req.description,
-        acceptance=req.acceptance,
-        status=req.status,
-        priority=req.priority,
-        size=req.size,
-        external_blocker=req.external_blocker,
-        assignee=req.assignee,
-        actor=_actor(),
-        links=req.links or None,
-        project_id=req.project_id,
-    )
+    try:
+        t = _store.create_task(
+            title=req.title,
+            description=req.description,
+            acceptance=req.acceptance,
+            status=req.status,
+            priority=req.priority,
+            size=req.size,
+            external_blocker=req.external_blocker,
+            assignee=req.assignee,
+            actor=_actor(),
+            links=req.links or None,
+            project_id=req.project_id,
+            parent_id=req.parent_id,
+            kind=req.kind,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     await emit_event(
         "task_created",
         {
