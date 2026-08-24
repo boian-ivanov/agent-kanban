@@ -305,7 +305,9 @@ def test_control_server_stop_and_steer():
             return json.loads(s.recv(65536).decode())
 
     assert send({"cmd": "ping"})["status"] == "running"
-    assert send({"cmd": "budget"})["error"] == "not_implemented"
+    # T-312: budget is implemented — live watchdog state (empty until set)
+    assert send({"cmd": "budget"})["ok"] is True
+    assert send({"cmd": "budget"})["budget"] == {}
 
     assert send({"cmd": "steer", "text": "@agent go slower", "comment_id": 7})["ok"]
     assert send({"cmd": "steer", "text": "   "})["ok"] is False  # empty rejected

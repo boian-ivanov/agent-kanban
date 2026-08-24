@@ -26,12 +26,19 @@ Flow:
        approved for a routine auto-retry — D2);
      - ``steer {text, comment_id}`` — inject a user message into the live
        session (``mode: followUp`` so it queues behind the running turn);
-     - ``ping`` / ``status``; budget commands land with T-312.
+     - ``ping`` / ``status`` / ``budget`` — live watchdog state (tokens
+       used, elapsed, limits; T-312).
      Comments starting with ``@agent`` also steer (board rules engine
      forwards them to this socket); the driver additionally polls
      GET /api/tasks/{id}?since_seq every 5s as a fallback so steering keeps
      working when the rule path is unavailable,
-  6. mark the run done/failed/stopped in task_runs and exit. A run is
+  6. enforce per-task budgets (T-312): max_tokens (default 30M, D5),
+     max_duration (default 60 min), a no-progress watchdog (<1KB agent-log
+     growth per 5 min while alive = churn) and dot-only output detection
+     (T-284 500M-token incident). On breach: kill the session, comment
+     evidence (elapsed, tokens, log bytes — same as orchestrator.py
+     --progress) and move the task back to approved,
+  7. mark the run done/failed/stopped in task_runs and exit. A run is
      finished when a turn completes and the task has left in_progress
      (the agent's normal final move is to testing).
 
@@ -69,6 +76,14 @@ OMP_BIN = os.environ.get("OMP_BIN", "omp")
 POLL_INTERVAL = 5.0
 # How long to wait after SIGINT before escalating to SIGTERM/SIGKILL.
 SIGINT_GRACE = 10.0
+# T-312 watchdog budgets (D5-locked trial values; tune per role via
+# agents.json or per run via CLI flags):
+DEFAULT_MAX_TOKENS = 30_000_000  # 30M tokens per task run
+DEFAULT_MAX_DURATION_S = 3600  # 60 min per task run
+NO_PROGRESS_WINDOW_S = 300  # no-progress check window (5 min)
+NO_PROGRESS_MIN_GROWTH = 1024  # <1KB agent-log growth in window = churn
+DOT_RUN_BYTES = 1024  # 1024 consecutive dot chars = dot-only churn (T-284)
+WATCH_TICK_S = 1.0  # budget watchdog tick
 
 
 class ApiError(RuntimeError):
@@ -141,8 +156,8 @@ def classify_steer(text: str) -> tuple[str, str, str] | None:
 class ControlServer:
     """Localhost control socket; port is recorded in task_runs.
 
-    T-310 exposed the socket (ping/status answer); T-311 adds stop/steer.
-    Budget commands arrive with T-312; unknown commands get
+    T-310 exposed the socket (ping/status answer); T-311 adds stop/steer;
+    T-312 adds ``budget`` (live watchdog state). Unknown commands get
     ``not_implemented`` so the wire protocol stays stable.
     """
 
@@ -158,6 +173,7 @@ class ControlServer:
         self._steers: queue.Queue[tuple[str, int | None]] = queue.Queue()
         self._stop_lock = threading.Lock()
         self._stop_request: dict[str, Any] | None = None
+        self._budget: dict[str, Any] | None = None
         self._thread = threading.Thread(target=self._run, name="control", daemon=True)
         self._thread.start()
 
@@ -214,6 +230,13 @@ class ControlServer:
                 return {"ok": False, "cmd": "steer", "error": "empty text"}
             self._steers.put((text, req.get("comment_id")))
             return {"ok": True, "cmd": "steer", "queued": True}
+        if cmd == "budget":
+            return {
+                "ok": True,
+                "cmd": "budget",
+                **self._meta,
+                "budget": self._budget or {},
+            }
         return {"ok": False, "cmd": cmd, "error": "not_implemented"}
 
     def get_stop_request(self) -> dict[str, Any] | None:
@@ -225,6 +248,10 @@ class ControlServer:
             return self._steers.get_nowait()
         except queue.Empty:
             return None
+
+    def set_budget(self, budget: dict[str, Any]) -> None:
+        """Share the live watchdog state with the control socket."""
+        self._budget = budget
 
     def close(self) -> None:
         self._stop.set()
@@ -273,6 +300,30 @@ def main() -> int:
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--agents-json", default=str(DEFAULT_AGENTS_JSON))
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="token budget per run (0 disables; default 30M, role config overrides)",
+    )
+    parser.add_argument(
+        "--max-duration",
+        type=int,
+        default=None,
+        help="duration budget in seconds (0 disables; default 3600, role config overrides)",
+    )
+    parser.add_argument(
+        "--watchdog-window",
+        type=int,
+        default=NO_PROGRESS_WINDOW_S,
+        help="no-progress check window in seconds",
+    )
+    parser.add_argument(
+        "--watchdog-min-growth",
+        type=int,
+        default=NO_PROGRESS_MIN_GROWTH,
+        help="minimum agent-log byte growth per window; less while alive = churn",
+    )
     args = parser.parse_args()
 
     AGENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -298,6 +349,24 @@ def main() -> int:
     worktree = cfg.get("worktree") or str(REPO_ROOT)
     role_prompt = cfg.get("prompt") or ""
     constraints = "\n".join(f"- {c}" for c in agents.get("constraints", []))
+    # T-312 budgets: CLI > role config (agents.json) > D5-locked defaults.
+    # 0/None disables the respective limit.
+    cfg_max_tokens = cfg.get("max_tokens")
+    cfg_max_duration = cfg.get("max_duration")
+    max_tokens = (
+        args.max_tokens
+        if args.max_tokens is not None
+        else (cfg_max_tokens if cfg_max_tokens is not None else DEFAULT_MAX_TOKENS)
+    )
+    max_duration_s = (
+        args.max_duration
+        if args.max_duration is not None
+        else (
+            cfg_max_duration if cfg_max_duration is not None else DEFAULT_MAX_DURATION_S
+        )
+    )
+    watchdog_window = args.watchdog_window
+    watchdog_min_growth = args.watchdog_min_growth
 
     board = (
         api_json(args.base_url, "GET", f"/api/board?project={args.project_id}").get(
@@ -348,6 +417,15 @@ def main() -> int:
         )
     except ApiError as e:
         log_line(f"run registration failed: {e}")
+    budget_state: dict[str, Any] = {
+        "max_tokens": max_tokens,
+        "max_duration_s": max_duration_s,
+        "tokens": 0,
+        "elapsed_s": 0,
+        "log_bytes": 0,
+        "breach": None,
+    }
+    control.set_budget(budget_state)
 
     prompt_text = (
         f"You are a kanban worker agent dispatched by the local agent-kanban "
@@ -388,10 +466,30 @@ def main() -> int:
         proc.stdin.write(json.dumps(obj) + "\n")
         proc.stdin.flush()
 
+    read_buf: str = ""
+
     def read_line(timeout: float = 5.0) -> str | None:
-        if select.select([proc.stdout], [], [], timeout)[0]:
-            return proc.stdout.readline()
-        return None
+        """One JSON line from omp stdout.
+
+        select() only sees the OS pipe: when a burst of lines arrives in a
+        single read, Python's BufferedReader holds the rest and select goes
+        quiet, stalling the loop (T-312 watchdog exposed this). Read the raw
+        fd into our own buffer instead.
+        """
+        nonlocal read_buf
+        while True:
+            if "\n" in read_buf:
+                line, read_buf = read_buf.split("\n", 1)
+                return line + "\n"
+            if select.select([proc.stdout], [], [], timeout)[0]:
+                chunk = os.read(proc.stdout.fileno(), 65536).decode(
+                    "utf-8", errors="replace"
+                )
+                if not chunk:
+                    return None  # EOF
+                read_buf += chunk
+            else:
+                return None
 
     def write_chat(role: str, content: str) -> None:
         try:
@@ -406,7 +504,7 @@ def main() -> int:
 
     # --- steering state ---
     steered_ids: set[int] = set()
-    last_seq = max((h.get("id") or 0) for h in (task.get("history") or []))
+    last_seq = max(((h.get("id") or 0) for h in (task.get("history") or [])), default=0)
     last_poll = 0.0
     stop_request: dict[str, Any] | None = None
 
@@ -460,6 +558,13 @@ def main() -> int:
                 handle_steer(text, cid)
 
     run_status = "failed"
+    budget_breach: str | None = None
+    tokens_used = 0
+    t0 = time.monotonic()
+    dot_run = 0
+    prev_log_bytes = log_path.stat().st_size if log_path.exists() else 0
+    last_watch = t0
+    last_progress_check = t0
     try:
         ready = read_line(timeout=15)
         if not ready or not ready.strip():
@@ -468,11 +573,44 @@ def main() -> int:
             # drain startup frames (command lists, ui requests), then start
             while read_line(timeout=0.3):
                 pass
+            t0 = time.monotonic()
+            last_watch = t0
+            last_progress_check = t0
+            prev_log_bytes = log_path.stat().st_size if log_path.exists() else 0
             send({"type": "prompt", "message": prompt_text})
             log_line("omp session started; initial prompt sent")
 
             done = False
             while not done:
+                # 0. budget watchdog (T-312): duration and no-progress are
+                #    checked here; tokens/dot-only fire in the event handlers
+                if budget_breach is None:
+                    now = time.monotonic()
+                    if now - last_watch >= WATCH_TICK_S:
+                        last_watch = now
+                        elapsed_s = int(now - t0)
+                        budget_state["elapsed_s"] = elapsed_s
+                        if max_duration_s and elapsed_s >= max_duration_s:
+                            budget_breach = "max_duration"
+                        elif (
+                            now - last_progress_check >= watchdog_window
+                            and proc.poll() is None
+                        ):
+                            cur_bytes = (
+                                log_path.stat().st_size if log_path.exists() else 0
+                            )
+                            budget_state["log_bytes"] = cur_bytes
+                            if cur_bytes - prev_log_bytes < watchdog_min_growth:
+                                budget_breach = "no_progress"
+                            prev_log_bytes = cur_bytes
+                            last_progress_check = now
+                if budget_breach is not None:
+                    log_line(f"budget breach: {budget_breach}")
+                    budget_state["breach"] = budget_breach
+                    _interrupt(proc)
+                    run_status = "stopped"
+                    break
+
                 # 1. stop request (control socket or steering comment)
                 if stop_request is None:
                     stop_request = control.get_stop_request()
@@ -513,12 +651,32 @@ def main() -> int:
                             log_delta(delta)  # raw archive (SSE streams this)
                             sys.stdout.write(delta)
                             sys.stdout.flush()
+                            # dot-only churn (T-284): 1024 consecutive dots
+                            # = the model is burning tokens, not working
+                            if dot_run is not None:
+                                for ch in delta:
+                                    if ch == ".":
+                                        dot_run += 1
+                                        if dot_run >= DOT_RUN_BYTES:
+                                            budget_breach = "dot_only"
+                                            dot_run = None
+                                            break
+                                    else:
+                                        dot_run = 0
                 elif kind == "message_end":
                     message = obj.get("message") or {}
                     if message.get("role") == "assistant":
                         content = _message_text(message)
                         if content:
                             write_chat(f"agent:{role}", content)
+                        # per-request usage: the session total burned so far
+                        usage = message.get("usage") or {}
+                        total = usage.get("totalTokens")
+                        if isinstance(total, (int, float)) and total > 0:
+                            tokens_used += int(total)
+                            budget_state["tokens"] = tokens_used
+                            if max_tokens and tokens_used >= max_tokens:
+                                budget_breach = "max_tokens"
                     log_delta("\n")
                     sys.stdout.write("\n")
                     sys.stdout.flush()
@@ -555,6 +713,45 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+
+    # --- budget breach bookkeeping: comment evidence, move back to approved ---
+    if budget_breach is not None:
+        elapsed_min = (time.monotonic() - t0) / 60
+        log_bytes = log_path.stat().st_size if log_path.exists() else 0
+        status = "in_progress"
+        try:
+            fresh = api_json(args.base_url, "GET", f"/api/tasks/{args.task_id}")
+            status = fresh.get("status") or status
+        except ApiError:
+            pass
+        budget_state["breach"] = budget_breach
+        evidence = (
+            f"[progress] {args.task_id} status={status} "
+            f"elapsed={elapsed_min:.0f}m tokens={tokens_used}/{max_tokens} "
+            f"log={log_bytes}B alive=false"
+        )
+        text = (
+            f"Budget breach ({budget_breach}): {evidence} — killed session, "
+            f"moved back to approved for retry."
+        )
+        try:
+            api_json(
+                args.base_url,
+                "POST",
+                f"/api/tasks/{args.task_id}/comment",
+                {"text": text},
+            )
+        except ApiError as e:
+            log_line(f"budget comment failed: {e}")
+        try:
+            api_json(
+                args.base_url,
+                "POST",
+                f"/api/tasks/{args.task_id}/move",
+                {"to_status": "approved"},
+            )
+        except ApiError as e:
+            log_line(f"budget move failed: {e}")
 
     # --- stop bookkeeping: comment the reason, move per D2 ---
     if stop_request is not None:
