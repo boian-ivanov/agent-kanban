@@ -116,6 +116,28 @@ commit & push, close, and dispatch the next card.
 
 - Vault: `Agent Kanban — Redesign Plan.md`, `Agent Kanban — Local LLM Workflow
   Board.md` (root); skills live in the SALON repo too
+## Agent context protocol (epic → story → task)
+
+The hierarchy exists so agents get the FULL context of their ticket. Flows:
+
+- **Upward (automatic)**: the driver fetches `GET /api/tasks/{id}/context`
+  before every run and injects the bundle into the prompt — task fields,
+  ancestor chain (epic description, story acceptance), recent comments,
+  constraints. Older boards: 404 fallback to plain task fetch. Agents should
+  NOT re-fetch context; it is already in their prompt.
+- **Downward (children)**: `GET /api/tasks/{id}/children?include=full` —
+  full child cards in one call (a story's tickets, an epic's stories).
+  `GET /api/tasks/{id}/subtree` — the complete descendant tree (epic →
+  stories → tickets) for scoping. *(AK-011 pending: children/subtree
+  endpoints + children summary in /context — until they land, use
+  `GET /api/tasks?parent_id=<id>` summary + per-task fetches.)*
+- **Scoping flow (D3)**: an epic/story assigned `agent:scoping` is dispatched
+  on `approved`; the scoping agent reviews the subtree, creates child
+  stories/tickets (`parent_id` + description + acceptance, S/M only, never
+  `status:approved`), comments a summary, moves the epic/story to `uat` for
+  user review. Analysis-only — no code changes.
+- **For monitors/orchestrators**: `/context` is also the one-call way to see
+  a ticket's full picture (acceptance + parent plan) before dispatching.
   (`~/Projects/salon-platform/.omp/skills/kanban-pipeline`,
   `kanban-tickets`) — that pipeline's gate/commit rules are salon-specific
   (bun check, `type(T-0XX):` lefthook), do NOT copy them here.
