@@ -1,5 +1,7 @@
 -- Kanban schema (SQLite)
 -- v2: added projects + tasks.project_id (migration in Store._migrate_v2).
+-- v6: added tasks.parent_id + tasks.kind (Epic->Story->Ticket hierarchy),
+--     task_chat + task_runs tables (migration in Store._migrate_v6).
 
 CREATE TABLE IF NOT EXISTS projects (
     id          TEXT PRIMARY KEY,                    -- 'finops', 'kanban-dev', ...
@@ -26,18 +28,42 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at      TEXT NOT NULL,                   -- ISO8601
     moved_at        TEXT NOT NULL,                   -- ISO8601, last status change
     column_order    INTEGER NOT NULL DEFAULT 0,      -- order within the column (for drag-drop)
-    project_id      TEXT NOT NULL DEFAULT 'default'  -- FK -> projects.id
+    project_id      TEXT NOT NULL DEFAULT 'default', -- FK -> projects.id
+    parent_id       TEXT REFERENCES tasks(id),       -- Epic->Story->Ticket hierarchy (NULL = root)
+    kind            TEXT NOT NULL DEFAULT 'task'     -- epic/story/task
+        CHECK (kind IN ('epic','story','task'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, column_order);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
 -- idx_tasks_project_status is created in Store._migrate_v2 (after ALTER TABLE for older databases).
+-- idx_tasks_parent is created in Store._migrate_v6 (after ALTER TABLE for older databases).
 
 CREATE TABLE IF NOT EXISTS task_links (
     task_id  TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     type     TEXT NOT NULL,                          -- memory/file/pr/url
     value    TEXT NOT NULL,
     PRIMARY KEY (task_id, type, value)
+);
+CREATE TABLE IF NOT EXISTS task_chat (
+    task_id  TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    seq      INTEGER NOT NULL,                       -- 1-based per-task sequence
+    ts       TEXT NOT NULL,                          -- ISO8601
+    role     TEXT NOT NULL,                          -- user/agent:<name>
+    content  TEXT NOT NULL,
+    PRIMARY KEY (task_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+    task_id      TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    pid          INTEGER,                            -- driver process id
+    started_at   TEXT,                               -- ISO8601
+    ended_at     TEXT,                               -- ISO8601
+    model        TEXT,                               -- omp model id
+    role         TEXT,                               -- agent role (default/fe/be/...)
+    status       TEXT,                               -- running/done/failed/...
+    tokens_used  INTEGER,
+    control_port INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -74,7 +100,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '5');
+INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '6');
 INSERT OR IGNORE INTO meta(key, value) VALUES ('next_id', '1');
 
 -- Default project — read from env ``KANBAN_DEFAULT_PROJECT_ID`` / ``..._NAME``

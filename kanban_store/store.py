@@ -161,6 +161,7 @@ class Store:
             self._migrate_v3()
             self._migrate_v4()
             self._migrate_v5()
+            self._migrate_v6()
 
     def _migrate_v5(self) -> None:
         """v4 → v5: projects.model TEXT (omp model override)."""
@@ -172,6 +173,35 @@ class Store:
         ).fetchone()
         if row and int(row["value"]) < 5:
             self._conn.execute("UPDATE meta SET value='5' WHERE key='schema_version'")
+    def _migrate_v6(self) -> None:
+        """v5 → v6: tasks.parent_id + tasks.kind (Epic->Story->Ticket
+        hierarchy) and task_chat/task_runs tables (created via schema.sql;
+        this method only ALTERs tasks and bumps the version).
+
+        Backfill: existing rows become kind='task' with parent_id NULL.
+        Idempotent: checks PRAGMA table_info before running ALTER.
+        """
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "parent_id" not in cols:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id)"
+            )
+        if "kind" not in cols:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task' "
+                "CHECK (kind IN ('epic','story','task'))"
+            )
+        # Backfill (no-op on fresh rows, explicit for migrated ones).
+        self._conn.execute("UPDATE tasks SET kind='task' WHERE kind IS NULL")
+        self._conn.execute("UPDATE tasks SET parent_id=NULL WHERE parent_id IS NULL")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)"
+        )
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        if row and int(row["value"]) < 6:
+            self._conn.execute("UPDATE meta SET value='6' WHERE key='schema_version'")
 
     def _migrate_v4(self) -> None:
         """v3 → v4: project_sources table (created via schema.sql,
