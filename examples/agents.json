@@ -3,7 +3,8 @@
     "Do NOT run git commit or push. The board owner commits changes; leave the working tree modified for human review.",
     "BEFORE moving the task to testing, the working tree MUST pass the full repo gate: run `bun run format` (oxfmt write mode) so every changed file is formatted, then `bun check` and confirm it exits 0 (svelte-check, vitest+coverage, fallow dupes/health). If `bun check` fails, fix the findings first. Unformatted or red-tree work will be bounced back.",
     "Do not leave background dev servers, watchers, or build processes running when you finish (stop servers you started; note any pre-existing ones in your summary).",
-    "NEVER run destructive commands or delete files outside your own change set: no `git clean`, `git reset --hard`, `git restore .`, `git checkout -- .`, `rm`, or moving files to trash. Untracked files (CLAUDE.md, PLAN.md, other agents' uncommitted work) are NOT yours — the board keeps a persistent shared worktree between runs. Use `git status`/`git diff` to inspect and `git checkout -- <file>` ONLY to revert a file you yourself changed in this run. (T-312 incident 2026-08-24: an agent's restore wiped its own work and the project's CLAUDE.md/PLAN.md.)"
+    "NEVER run destructive commands or delete files outside your own change set: no `git clean`, `git reset --hard`, `git restore .`, `git checkout -- .`, `rm`, or moving files to trash. Untracked files (CLAUDE.md, PLAN.md, other agents' uncommitted work) are NOT yours — the board keeps a persistent shared worktree between runs. Use `git status`/`git diff` to inspect and `git checkout -- <file>` ONLY to revert a file you yourself changed in this run. (T-312 incident 2026-08-24: an agent's restore wiped its own work and the project's CLAUDE.md/PLAN.md.)",
+    "NEVER spawn the launcher/driver chain for the task you are working on, or any live task id, against the live board — it corrupts the shared run registry and agent log. Chain tests MUST use a scratch server on a temp port (KANBAN_HOST/PORT or --base-url) and a scratch task id, never the live 7777 board or your own task. (T-313 incident 2026-08-24: chain-test drivers for the live task corrupted the run row and killed the session.)"
   ],
   "default": {
     "model": "opencode-go/deepseek-v4-flash",
@@ -31,5 +32,12 @@
     "model": "opencode-go/deepseek-v4-flash",
     "worktree": "/Users/boian.ivanov/Projects/nameri.me",
     "prompt": "You are the INVESTIGATION/RESEARCH engineer. Analyze the codebase, data, logs, or docs to answer the task's question or find root causes. Do not make speculative changes; produce findings with evidence (file:line, commands, observed behavior) and a recommended next action. Document findings concisely."
+  },
+  "scoping": {
+    "model": "opencode-go/deepseek-v4-flash",
+    "worktree": "/Users/boian.ivanov/Projects/nameri.me",
+    "prompt": "You are the SCOPING/ANALYSIS engineer (D3-lock). You NEVER change code — analysis-only. Review the epic/story in the task context against the codebase in the current directory, then decompose it into concrete child stories/tickets: create them via POST /api/tasks with parent_id=<this task id>, description, and acceptance criteria (kind is derived from the parent automatically). Keep children minimal, verifiable, and independently doable by an implementer role. Then post a summary comment listing the children you created, and move this task to uat for user review (never to testing).",
+    "max_tokens": 30000000,
+    "max_duration": 3600
   }
 }
