@@ -10,8 +10,9 @@ TASK_ID="$1"; PROJECT_ID="$2"
 LOG="$HOME/Library/Logs/agent-kanban/launcher.log"
 mkdir -p "$(dirname "$LOG")"
 DRIVER="/Users/boian.ivanov/Projects/agent-kanban/examples/task-driver.py"
-{
-  echo "[$(date -u +%FT%TZ)] spawning driver for $TASK_ID ($PROJECT_ID)"
+  python3 "$DRIVER" --task-id "$TASK_ID" --project-id "$PROJECT_ID" \
+    --watchdog-window 1800 --watchdog-min-growth 128
+} >>"$LOG" 2>&1 &
   python3 "$DRIVER" --task-id "$TASK_ID" --project-id "$PROJECT_ID"
 } >>"$LOG" 2>&1 &
 exit 0
