@@ -93,6 +93,7 @@ SIGINT_GRACE = 10.0
 # T-314: verify mode waits this long for a live implementer run to clear
 # before skipping dispatch (guard: live agent process still owns the task).
 VERIFY_GUARD_TIMEOUT_S = 60
+
 # T-312 watchdog budgets (D5-locked trial values; tune per role via
 # agents.json or per run via CLI flags):
 DEFAULT_MAX_TOKENS = 30_000_000  # 30M tokens per task run
@@ -101,6 +102,16 @@ NO_PROGRESS_WINDOW_S = 300  # no-progress check window (5 min)
 NO_PROGRESS_MIN_GROWTH = 1024  # <1KB agent-log growth in window = churn
 DOT_RUN_BYTES = 1024  # 1024 consecutive dot chars = dot-only churn (T-284)
 WATCH_TICK_S = 1.0  # budget watchdog tick
+
+# AK-002: generic repo-gate fallback for projects without their own
+# constraints (PATCH /api/projects). The agent detects the stack and runs
+# the repo's own check instead of an unrelated project's gate.
+GENERIC_GATE = (
+    "Run the repo's own check before moving the task to testing: "
+    "pytest/ruff for Python, bun check for JS/TS — detect via "
+    "package.json/pyproject.toml. Fix findings; unformatted or red-tree "
+    "work will be bounced back."
+)
 
 
 class ApiError(RuntimeError):
@@ -575,7 +586,13 @@ def main() -> int:
     # Older boards without /context fall back to the local agents.json
     # constraints (no bundle text). ---
     context_text = ""
-    constraints = "\n".join(f"- {c}" for c in agents.get("constraints", []))
+    # AK-002: constraints are composed per project. The global rules
+    # (no-commit, no-stray-servers, ...) come from agents.json (mirrored by
+    # the context bundle on new boards); the project's own gate comes from
+    # the board (PATCH /api/projects constraints) — the driver already
+    # fetched that as ``board`` above. Projects without constraints get a
+    # generic repo-gate instruction instead of another project's gate.
+    global_constraints = list(agents.get("constraints", []))
     try:
         context = api_json(args.base_url, "GET", f"/api/tasks/{args.task_id}/context")
     except ApiError as e:
@@ -583,7 +600,24 @@ def main() -> int:
     else:
         context_text = _render_context(context, args.task_id)
         if context.get("constraints"):
-            constraints = "\n".join(f"- {c}" for c in context["constraints"])
+            global_constraints = list(context["constraints"])
+    board_constraints = board.get("constraints")
+    if board_constraints:
+        # AK-002: board PATCH wins when set (non-empty list).
+        project_constraints = list(board_constraints)
+    elif board_constraints is None:
+        # Board has no opinion (legacy boards / column never configured):
+        # fall back to the per-project seed in agents.json (salon-platform
+        # keeps its bun gate on fresh boards); no seed -> generic repo gate.
+        seed = (agents.get("project_constraints") or {}).get(args.project_id) or []
+        project_constraints = list(seed) or [GENERIC_GATE]
+    else:
+        # Board constraints explicitly cleared (PATCH []): no project gate —
+        # inject the generic repo check instead of the seed.
+        project_constraints = [GENERIC_GATE]
+    constraints = "\n".join(
+        f"- {c}" for c in [*global_constraints, *project_constraints]
+    )
 
     if args.mode == "verify":
         prompt_text = (
@@ -597,13 +631,9 @@ def main() -> int:
             f"Constraints:\n{constraints}\n\n"
             f"Board protocol (verification):\n"
             f"1. Read the task's description and acceptance criteria.\n"
-            f"2. Run the repo gate, then smoke-test where feasible:\n"
-            f"   - salon-platform: `bun run format` (oxfmt write mode) then\n"
-            f"     `bun check`; both must exit 0. Note in your evidence\n"
-            f"     whether format modified any files.\n"
-            f"   - any other project: the repo's own check/build/test\n"
-            f"     entrypoint (scripts in package.json/Makefile/README); if\n"
-            f"     none, run a syntax/compile check and the test suite.\n"
+            f"2. Run the repo gate listed in the Constraints above (the\n"
+            f"   project's own gate when set, else the generic repo check),\n"
+            f"   then smoke-test where feasible:\n"
             f"   - smoke: run the changed surface (app/CLI/script) and\n"
             f"     exercise the changed path.\n"
             f"3. Post your verdict with exact evidence (commands run, exit\n"

@@ -7,7 +7,7 @@ Endpoints (v2):
     GET    /api/board?project=&include=  — tasks of a project + column meta (include=full → full payloads)
     GET    /api/projects              — list of projects with task_counts
     POST   /api/projects              — create a project
-    PATCH  /api/projects/{id}         — update (name/color/icon/sort_order)
+    PATCH  /api/projects/{id}         — update (name/color/icon/sort_order/path/model/code/constraints)
     POST   /api/projects/{id}/archive — archive (toggle)
     GET    /api/tasks?project=&status=&assignee=&parent_id=&updated_since=  — filtered task list
     GET    /api/tasks/{task_id}       — full card with history
@@ -249,6 +249,11 @@ class ProjectCreate(BaseModel):
         description="ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); "
         "None = legacy T-### ids",
     )
+    constraints: list[str] | None = Field(
+        None,
+        description="per-project agent constraint strings (the project's "
+        "repo gate); None = legacy boards / no project-specific gate",
+    )
 
 
 class ProjectUpdate(BaseModel):
@@ -262,6 +267,12 @@ class ProjectUpdate(BaseModel):
         None,
         description="ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); "
         'None leaves it unchanged, "" clears back to legacy T-### ids',
+    )
+    constraints: list[str] | None = Field(
+        None,
+        description="per-project agent constraint strings; None leaves it "
+        "unchanged, [] clears back to no project gate (driver falls back "
+        "to the generic repo-gate instruction)",
     )
 
 
@@ -413,6 +424,7 @@ def create_project(req: ProjectCreate) -> dict[str, Any]:
             path=_normalize_path(req.path),
             model=req.model or None,
             code=code,
+            constraints=req.constraints,
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -437,6 +449,7 @@ def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
             path=_normalize_path(req.path) if req.path != "" else "",
             model=req.model or "",
             code=code,
+            constraints=req.constraints,
         )
     except KeyError:
         raise HTTPException(404, f"project {project_id} not found")

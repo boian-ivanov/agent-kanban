@@ -209,3 +209,34 @@ def test_runs_endpoints(api):
     assert fetched == done
     assert client.post("/api/tasks/T-999/runs", json={"pid": 1}).status_code == 404
     assert client.post(f"/api/tasks/{t.id}/runs", json={}).status_code == 400
+
+
+def test_project_constraints_patch_endpoint(api):
+    """AK-002: per-project constraints overridable via PATCH /api/projects
+    and exposed on the board endpoint the driver reads."""
+    client, _ = api
+    client.post(
+        "/api/projects",
+        json={"id": "salon-platform", "name": "Salon Platform"},
+    )
+    # unset: board carries None (driver falls back to the agents.json seed)
+    assert client.get("/api/board?project=salon-platform").json()["project"][
+        "constraints"
+    ] is None
+    # set constraints
+    r = client.patch(
+        "/api/projects/salon-platform",
+        json={"constraints": ["bun run format", "bun check"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["constraints"] == ["bun run format", "bun check"]
+    # board payload carries them (driver reads board["constraints"])
+    board = client.get("/api/board?project=salon-platform").json()
+    assert board["project"]["constraints"] == ["bun run format", "bun check"]
+    # [] clears back to no project gate
+    r2 = client.patch("/api/projects/salon-platform", json={"constraints": []})
+    assert r2.status_code == 200
+    assert r2.json()["constraints"] == []
+    assert client.get("/api/board?project=salon-platform").json()["project"][
+        "constraints"
+    ] == []

@@ -1,11 +1,15 @@
 {
   "constraints": [
     "Do NOT run git commit or push. The board owner commits changes; leave the working tree modified for human review.",
-    "BEFORE moving the task to testing, the working tree MUST pass the full repo gate: run `bun run format` (oxfmt write mode) so every changed file is formatted, then `bun check` and confirm it exits 0 (svelte-check, vitest+coverage, fallow dupes/health). If `bun check` fails, fix the findings first. Unformatted or red-tree work will be bounced back.",
     "Do not leave background dev servers, watchers, or build processes running when you finish (stop servers you started; note any pre-existing ones in your summary).",
     "NEVER run destructive commands or delete files outside your own change set: no `git clean`, `git reset --hard`, `git restore .`, `git checkout -- .`, `rm`, or moving files to trash. Untracked files (CLAUDE.md, PLAN.md, other agents' uncommitted work) are NOT yours — the board keeps a persistent shared worktree between runs. Use `git status`/`git diff` to inspect and `git checkout -- <file>` ONLY to revert a file you yourself changed in this run. (T-312 incident 2026-08-24: an agent's restore wiped its own work and the project's CLAUDE.md/PLAN.md.)",
     "NEVER spawn the launcher/driver chain for the task you are working on, or any live task id, against the live board — it corrupts the shared run registry and agent log. Chain tests MUST use a scratch server on a temp port (KANBAN_HOST/PORT or --base-url) and a scratch task id, never the live 7777 board or your own task. (T-313 incident 2026-08-24: chain-test drivers for the live task corrupted the run row and killed the session.)"
   ],
+  "project_constraints": {
+    "salon-platform": [
+      "BEFORE moving the task to testing, the working tree MUST pass the full repo gate: run `bun run format` (oxfmt write mode) so every changed file is formatted, then `bun check` and confirm it exits 0 (svelte-check, vitest+coverage, fallow dupes/health). If `bun check` fails, fix the findings first. Unformatted or red-tree work will be bounced back."
+    ]
+  },
   "default": {
     "model": "opencode-go/deepseek-v4-flash",
     "worktree": "/Users/boian.ivanov/Projects/nameri.me",
@@ -26,7 +30,7 @@
   "verification": {
     "model": "opencode-go/deepseek-v4-flash",
     "worktree": "/Users/boian.ivanov/Projects/nameri.me",
-    "prompt": "You are the VERIFICATION/QA engineer. D1-lock: you NEVER commit or push — the board owner commits after you pass; leave the working tree modified for review. Do not write feature code — verify the task's claims and acceptance criteria only. Read the task's description and acceptance criteria, then run the repo gate: salon-platform — `bun run format` (oxfmt write mode) then `bun check` (must exit 0); other projects — run the project's own checks (e.g. pytest, ruff, bun check) or a sensible project-agnostic fallback (inspect the diff, run the available test suite). Smoke the changed path where feasible (launch the app/binary, exercise the change). Report pass/fail with exact evidence: commands run, outputs, files/diffs examined. PASS -> comment the evidence and move the task to done. FAIL -> comment the exact findings (what failed, where, actual output) and move the task to approved (auto-retriggers the fix run). Move to blocked ONLY when human intervention is required. The task stays in testing while you work."
+    "prompt": "You are the VERIFICATION/QA engineer. D1-lock: you NEVER commit or push — the board owner commits after you pass; leave the working tree modified for review. Do not write feature code — verify the task's claims and acceptance criteria only. Read the task's description and acceptance criteria, then run the repo gate listed in the Constraints below (project-specific when set, else the repo's own checks — e.g. pytest/ruff for Python, bun check for JS/TS — or a sensible project-agnostic fallback: inspect the diff, run the available test suite). Smoke the changed path where feasible (launch the app/binary, exercise the change). Report pass/fail with exact evidence: commands run, outputs, files/diffs examined. PASS -> comment the evidence and move the task to done. FAIL -> comment the exact findings (what failed, where, actual output) and move the task to approved (auto-retriggers the fix run). Move to blocked ONLY when human intervention is required. The task stays in testing while you work."
   },
   "investigation": {
     "model": "opencode-go/deepseek-v4-flash",

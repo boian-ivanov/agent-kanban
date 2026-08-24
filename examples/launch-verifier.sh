@@ -6,8 +6,8 @@
 # its run the driver waits for any live implementer run to clear (guard:
 # never dispatch while an agent process still owns the task; bounded by
 # --guard-timeout, then skip with a comment). The verifier agent reads the
-# acceptance criteria, runs the repo gate (salon-platform: bun run format +
-# bun check; project-agnostic fallback), smokes where feasible, then:
+# acceptance criteria, runs the repo gate (the project's own gate from the
+# Constraints, else a project-agnostic fallback), smokes where feasible, then:
 #   PASS -> comments evidence + moves to done
 #   FAIL -> comments exact findings + moves to approved (auto-retriggers the
 #           fix run)

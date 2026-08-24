@@ -4,6 +4,8 @@
 --     task_chat + task_runs tables (migration in Store._migrate_v6).
 -- v7: added projects.code (per-project ticket prefix, e.g. AK/SP) and the
 --     project_seq table (per-project id sequence; migration in Store._migrate_v7).
+-- v8: added projects.constraints (per-project agent constraint list, JSON;
+--     migration in Store._migrate_v8).
 
 CREATE TABLE IF NOT EXISTS projects (
     id          TEXT PRIMARY KEY,                    -- 'finops', 'kanban-dev', ...
@@ -15,6 +17,7 @@ CREATE TABLE IF NOT EXISTS projects (
     path        TEXT,                                -- project directory (optional)
     model       TEXT,                                -- omp model override (e.g. "deepinfra/deepseek-v4-flash")
     code        TEXT,                                -- ticket id prefix (upper, e.g. AK/SP/NM); NULL = legacy T-###
+    constraints TEXT,                                -- JSON list of agent constraint strings (project-specific gate)
     created_at  TEXT NOT NULL                        -- ISO8601
 );
 

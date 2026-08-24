@@ -86,7 +86,7 @@ def test_migrate_v5_to_v6_lossless(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()["value"]
-            == "7"
+            == "8"
         )
 
         # tasks columns added
@@ -139,7 +139,7 @@ def test_migrate_v6_idempotent(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "7"
+            == "8"
         )
     finally:
         conn.close()
@@ -154,9 +154,72 @@ def test_fresh_db_is_v7(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "7"
+            == "8"
         )
         cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
         assert {"parent_id", "kind"} <= cols
     finally:
         conn.close()
+
+
+def test_migrate_v5_to_v8_adds_constraints(tmp_path, monkeypatch):
+    """Full migration chain (v5 -> v8): the constraints column appears and
+    legacy data survives — guards against dropping an intermediate _migrate
+    call (v5/v6/v7) from the chain."""
+    # test_plan_md_loose.py leaks KANBAN_DEFAULT_PROJECT_ID — pin it so the
+    # v2 migration seeds the canonical 'default' project row.
+    monkeypatch.setenv("KANBAN_DEFAULT_PROJECT_ID", "default")
+    monkeypatch.setenv("KANBAN_DEFAULT_PROJECT_NAME", "Default")
+    db = tmp_path / "test.db"
+    _make_v5_db(db)
+
+    Store(db)
+
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        assert (
+            conn.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()["value"]
+            == "8"
+        )
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+        assert {"code", "constraints", "model", "path"} <= cols
+        # legacy task preserved through every migration
+        assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 1
+        # the default project (seeded during v2 migration) has no constraints
+        assert conn.execute(
+            "SELECT constraints FROM projects WHERE id='default'"
+        ).fetchone()[0] is None
+    finally:
+        conn.close()
+
+
+def test_project_constraints_roundtrip(tmp_path):
+    """projects.constraints: set via create, overridable via update, [] clears."""
+    store = Store(tmp_path / "t.db")
+    p = store.create_project(
+        "agent-kanban",
+        "Agent Kanban",
+        path="/tmp/ak",
+        constraints=["no commit", "pytest gate"],
+    )
+    assert p.constraints == ["no commit", "pytest gate"]
+    assert p.to_public()["constraints"] == ["no commit", "pytest gate"]
+
+    p2 = store.update_project("agent-kanban", constraints=["only pytest"])
+    assert p2.constraints == ["only pytest"]
+
+    p3 = store.update_project("agent-kanban", constraints=[])
+    assert p3.constraints == []
+
+    # None leaves the value alone
+    p4 = store.update_project("agent-kanban", name="Renamed")
+    assert p4.constraints == []
+
+    # unset (never configured) is None, not [] — the driver must tell
+    # "no board opinion" (seed fallback) apart from "cleared" (generic gate)
+    plain = store.create_project("plain", "Plain")
+    assert plain.constraints is None
+    assert plain.to_public()["constraints"] is None

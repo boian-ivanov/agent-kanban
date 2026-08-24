@@ -92,7 +92,7 @@ def test_migrate_v6_to_v7(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()["value"]
-            == "7"
+            == "8"
         )
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
         assert "code" in cols
@@ -120,7 +120,7 @@ def test_migrate_v7_idempotent(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "7"
+            == "8"
         )
     finally:
         conn.close()

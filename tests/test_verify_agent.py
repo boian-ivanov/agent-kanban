@@ -104,6 +104,8 @@ class FakeBoard:
         self.run_posts: list[dict] = []
         self.live_runs: list[tuple[str, int | None]] = []
         self._runs_gets = 0
+        # AK-002: /api/board project payload (drives constraints resolution)
+        self.project_payload: dict = {}
 
     def serve(self) -> str:
         server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(self))
@@ -162,7 +164,7 @@ def _handler(board: FakeBoard):
 
         def do_GET(self) -> None:
             if self.path.startswith("/api/board"):
-                self._send(200, {"project": {}})
+                self._send(200, {"project": board.project_payload})
             elif "since_seq" in self.path:
                 self._send(200, {"history": []})
             elif self.path.endswith("/context"):
@@ -204,6 +206,7 @@ def run_driver(
     tmp_path: Path,
     mode: str = "pass",
     task_id: str = "T-VER",
+    project_id: str = "agent-kanban",
     guard_args: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess, Path]:
     fake = tmp_path / "fake_omp.py"
@@ -224,7 +227,7 @@ def run_driver(
         "--task-id",
         task_id,
         "--project-id",
-        "agent-kanban",
+        project_id,
         "--base-url",
         board_url,
         "--mode",
@@ -272,12 +275,60 @@ def test_verify_pass_moves_done_no_claim(board, tmp_path):
     assert b.run_posts[0].get("role") == "verification"
     assert b.run_posts[0].get("status") == "running"
     assert b.run_posts[-1].get("status") == "done"
-    # prompt carries the verification protocol + repo gate + D1 no-commit
+    # prompt carries the verification protocol + repo gate + D1 no-commit.
+    # AK-002: agent-kanban has no project gate, so the driver injects the
+    # generic repo check — the salon bun gate must NOT leak here.
     prompt = prompt_file.read_text(encoding="utf-8")
     assert "Board protocol (verification)" in prompt
-    assert "bun run format" in prompt and "bun check" in prompt
+    assert "bun run format" not in prompt
+    assert "pytest/ruff" in prompt and "bun check" in prompt
     assert "NEVER commit" in prompt
     assert "FAIL -> approved" in prompt
+    _clean_log("T-VER")
+
+
+def test_verify_salon_platform_keeps_bun_gate(board, tmp_path):
+    """AK-002: the salon-platform project still gets its bun gate — from the
+    per-project seed in agents.json when the board has no constraints set."""
+    b, url = board
+    proc, prompt_file = run_driver(url, tmp_path, mode="pass",
+                                   project_id="salon-platform")
+
+    assert proc.returncode == 0, f"driver failed:\n{proc.stdout}\n{proc.stderr}"
+    assert b.moves == ["done"], f"moves: {b.moves}"
+    prompt = prompt_file.read_text(encoding="utf-8")
+    assert "bun run format" in prompt and "bun check" in prompt
+    _clean_log("T-VER")
+
+
+def test_verify_board_constraints_override_seed(board, tmp_path):
+    """AK-002: PATCH /api/projects constraints win over the agents.json seed
+    (board payload is the source of truth when it carries a list)."""
+    b, url = board
+    b.project_payload = {"constraints": ["custom project gate"]}
+    proc, prompt_file = run_driver(url, tmp_path, mode="pass",
+                                   project_id="salon-platform")
+
+    assert proc.returncode == 0, f"driver failed:\n{proc.stdout}\n{proc.stderr}"
+    prompt = prompt_file.read_text(encoding="utf-8")
+    assert "custom project gate" in prompt
+    assert "bun run format" not in prompt
+    _clean_log("T-VER")
+
+
+def test_verify_cleared_constraints_use_generic_gate(board, tmp_path):
+    """AK-002: PATCH /api/projects constraints=[] clears the project gate —
+    the driver must NOT fall back to the salon seed; it injects the generic
+    repo check instead."""
+    b, url = board
+    b.project_payload = {"constraints": []}
+    proc, prompt_file = run_driver(url, tmp_path, mode="pass",
+                                   project_id="salon-platform")
+
+    assert proc.returncode == 0, f"driver failed:\n{proc.stdout}\n{proc.stderr}"
+    prompt = prompt_file.read_text(encoding="utf-8")
+    assert "bun run format" not in prompt
+    assert "pytest/ruff for Python" in prompt
     _clean_log("T-VER")
 
 

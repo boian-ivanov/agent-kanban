@@ -128,6 +128,7 @@ class Project:
     sort_order: int
     archived: bool
     created_at: str
+    constraints: list[str] | None = None
     path: str | None = None
     model: str | None = None
     code: str | None = None
@@ -145,6 +146,25 @@ class Project:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_constraints(row: sqlite3.Row) -> list[str] | None:
+    """Parse the projects.constraints JSON column.
+
+    NULL -> None (never configured on the board; the driver falls back to
+    the per-project seed in agents.json), '[]'/list JSON -> list (explicitly
+    configured — [] means cleared, so the driver injects the generic repo
+    gate instead), corrupt JSON -> [] (set but unreadable — treat as
+    cleared).
+    """
+    raw = row["constraints"]
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return []
+    return list(parsed) if isinstance(parsed, list) else []
 
 
 class Store:
@@ -181,6 +201,24 @@ class Store:
             self._migrate_v5()
             self._migrate_v6()
             self._migrate_v7()
+            self._migrate_v8()
+
+    def _migrate_v8(self) -> None:
+        """v7 → v8: projects.constraints (JSON list of per-project agent
+        constraint strings — the project-specific repo gate).
+
+        Idempotent: checks PRAGMA table_info before running ALTER.
+        """
+        cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
+        if "constraints" not in cols:
+            self._conn.execute("ALTER TABLE projects ADD COLUMN constraints TEXT")
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        if row and int(row["value"]) < 8:
+            self._conn.execute("UPDATE meta SET value='8' WHERE key='schema_version'")
 
     def _migrate_v5(self) -> None:
         """v4 → v5: projects.model TEXT (omp model override)."""
@@ -992,6 +1030,7 @@ class Store:
         path: str | None = None,
         model: str | None = None,
         code: str | None = None,
+        constraints: list[str] | None = None,
     ) -> Project:
         ts = _now()
         with self._lock:
@@ -1006,8 +1045,9 @@ class Store:
                     sort_order = (r["m"] + 1) if r else 0
                 self._conn.execute(
                     """INSERT INTO projects
-                       (id, name, color, icon, sort_order, archived, path, model, code, created_at)
-                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+                       (id, name, color, icon, sort_order, archived, path, model,
+                        code, constraints, created_at)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)""",
                     (
                         project_id,
                         name,
@@ -1017,6 +1057,7 @@ class Store:
                         path,
                         model,
                         code,
+                        json.dumps(constraints) if constraints is not None else None,
                         ts,
                     ),
                 )
@@ -1039,6 +1080,7 @@ class Store:
         path: str | None = None,
         model: str | None = None,
         code: str | None = None,
+        constraints: list[str] | None = None,
     ) -> Project:
         sets: list[str] = []
         params: list[Any] = []
@@ -1061,6 +1103,12 @@ class Store:
             self._check_code_change(project_id, code)
             sets.append("code = ?")
             params.append(code or None)
+        if constraints is not None:
+            # [] stores as an explicit empty list (project gate cleared ->
+            # driver injects the generic repo check); None leaves the column
+            # untouched (NULL = unset -> driver falls back to the seed).
+            sets.append("constraints = ?")
+            params.append(json.dumps(constraints) if constraints is not None else None)
         if not sets:
             p = self.get_project(project_id)
             if p is None:
@@ -1176,6 +1224,9 @@ class Store:
         return p
 
     def _row_to_project(self, row: sqlite3.Row) -> Project:
+        constraints = (
+            _parse_constraints(row) if "constraints" in row.keys() else None
+        )
         return Project(
             id=row["id"],
             name=row["name"],
@@ -1187,9 +1238,9 @@ class Store:
             path=row["path"] if "path" in row.keys() else None,
             model=row["model"] if "model" in row.keys() else None,
             code=row["code"] if "code" in row.keys() else None,
+            constraints=constraints,
         )
 
-    # ------------------------------------------------------------------
     # Snapshot
     # ------------------------------------------------------------------
 
