@@ -4,11 +4,12 @@ with actor=KANBAN_ACTOR env var (default 'user').
 Endpoints (v2):
     GET    /                          — HTML (root, default project)
     GET    /p/{project_id}            — HTML for a specific project
-    GET    /api/board?project=        — tasks of a project + column meta
+    GET    /api/board?project=&include=  — tasks of a project + column meta (include=full → full payloads)
     GET    /api/projects              — list of projects with task_counts
     POST   /api/projects              — create a project
     PATCH  /api/projects/{id}         — update (name/color/icon/sort_order)
     POST   /api/projects/{id}/archive — archive (toggle)
+    GET    /api/tasks?project=&status=&assignee=&parent_id=&updated_since=  — filtered task list
     GET    /api/tasks/{task_id}       — full card with history
     POST   /api/tasks                 — create (project_id in payload)
     PATCH  /api/tasks/{task_id}       — update fields
@@ -266,26 +267,41 @@ def index_for_project(project_id: str) -> HTMLResponse:
 
 
 @app.get("/api/board")
-def get_board(project: str = Query(DEFAULT_PROJECT_ID, description="project_id")) -> dict[str, Any]:
+def get_board(
+    project: str = Query(DEFAULT_PROJECT_ID, description="project_id"),
+    include: str = Query(
+        "summary", description="summary|full — full returns the complete card payload"
+    ),
+) -> dict[str, Any]:
+    """Board grouped by status.
+
+    ``include=full`` returns full card payloads (description, acceptance,
+    comments, ancestors, parent_id, ...) for every task instead of the
+    compact summary fields.
+    """
     columns = status_meta()
     proj = _store.get_project(project)
     if proj is None:
         raise HTTPException(404, f"project {project} not found")
+    full = include == "full"
     by_status: dict[str, list[dict[str, Any]]] = {s: [] for s in STATUSES}
-    for t in _store.list_tasks(project_id=project):
-        by_status[t.status].append(
-            {
-                "id": t.id,
-                "title": t.title,
-                "priority": t.priority,
-                "size": t.size,
-                "assignee": t.assignee,
-                "external_blocker": t.external_blocker,
-                "blockers": t.blockers,
-                "moved_at": t.moved_at,
-                "project_id": t.project_id,
-            }
-        )
+    for t in _store.list_tasks(project_id=project, eager_history=full, eager_tree=full):
+        if full:
+            by_status[t.status].append(t.to_public())
+        else:
+            by_status[t.status].append(
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "size": t.size,
+                    "assignee": t.assignee,
+                    "external_blocker": t.external_blocker,
+                    "blockers": t.blockers,
+                    "moved_at": t.moved_at,
+                    "project_id": t.project_id,
+                }
+            )
     return {
         "columns": columns,
         "tasks": by_status,
@@ -620,6 +636,57 @@ def archive_project(project_id: str, req: ProjectArchiveRequest) -> dict[str, An
     except KeyError:
         raise HTTPException(404, f"project {project_id} not found")
     return p.to_public()
+
+
+# ---------------------------------------------------------------------------
+# Tasks
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/tasks")
+def list_tasks_api(
+    project: str | None = Query(None, description="project_id filter"),
+    status: str | None = Query(None, description="status filter"),
+    assignee: str | None = Query(None, description="assignee filter"),
+    parent_id: str | None = Query(None, description="parent_id filter"),
+    updated_since: str | None = Query(
+        None,
+        description="ISO8601 — only tasks with a history entry at or after this timestamp",
+    ),
+) -> dict[str, Any]:
+    """Filterable task list (summary cards), sorted by status/column_order.
+
+    Replaces per-task fetching for agents: project/status/assignee/parent_id
+    and last-updated filters in a single request.
+    """
+    tasks = _store.list_tasks(
+        status=status,
+        assignee=assignee,
+        project_id=project,
+        parent_id=parent_id,
+        updated_since=updated_since,
+    )
+    return {
+        "tasks": [
+            {
+                "id": t.id,
+                "title": t.title,
+                "status": t.status,
+                "priority": t.priority,
+                "size": t.size,
+                "assignee": t.assignee,
+                "external_blocker": t.external_blocker,
+                "blockers": t.blockers,
+                "parent_id": t.parent_id,
+                "kind": t.kind,
+                "moved_at": t.moved_at,
+                "created_at": t.created_at,
+                "project_id": t.project_id,
+            }
+            for t in tasks
+        ],
+        "count": len(tasks),
+    }
 
 
 # ---------------------------------------------------------------------------

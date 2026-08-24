@@ -92,13 +92,29 @@ class Task:
     moved_at: str
     column_order: int
     project_id: str = DEFAULT_PROJECT_ID
+    parent_id: str | None = None
+    kind: str = "task"
     links: list[dict[str, str]] = field(default_factory=list)
     history: list[TaskHistory] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
+    ancestors: list[dict[str, Any]] = field(default_factory=list)
+    children_count: int = 0
 
     def to_public(self) -> dict[str, Any]:
+        """Full card payload.
+
+        ``comments`` is derived from history (action='comment' rows).
+        ``ancestors`` (parent chain, root-first) and ``children_count`` are
+        populated by the store only when loaded eagerly (get_task and
+        full-payload list/board calls); otherwise they are empty/0.
+        """
         d = asdict(self)
         d["history"] = [asdict(h) for h in self.history]
+        d["comments"] = [
+            {"id": h.id, "ts": h.ts, "actor": h.actor, "text": h.comment}
+            for h in self.history
+            if h.action == "comment"
+        ]
         return d
 
 
@@ -338,11 +354,22 @@ class Store:
         status: str | Iterable[str] | None = None,
         assignee: str | None = None,
         project_id: str | None = None,
+        parent_id: str | None = None,
+        updated_since: str | None = None,
+        *,
+        eager_history: bool = False,
+        eager_tree: bool = False,
     ) -> list[Task]:
         """List of tasks with filters, sorted by (status, column_order).
 
         ``project_id=None`` means "all projects". The board UI always
         passes a concrete project_id.
+
+        ``parent_id`` filters direct children of a task; ``updated_since``
+        (ISO8601) matches tasks with a history entry at or after the
+        timestamp (covers create/move/comment/assign/update).
+        ``eager_history``/``eager_tree`` preload comments and the parent
+        chain + children counts for full-payload callers.
         """
         sql = "SELECT * FROM tasks WHERE 1=1"
         params: list[Any] = []
@@ -360,10 +387,24 @@ class Store:
         if project_id is not None:
             sql += " AND project_id = ?"
             params.append(project_id)
+        if parent_id is not None:
+            sql += " AND parent_id = ?"
+            params.append(parent_id)
+        if updated_since is not None:
+            sql += (
+                " AND EXISTS (SELECT 1 FROM task_history h"
+                " WHERE h.task_id = tasks.id AND h.ts >= ?)"
+            )
+            params.append(updated_since)
         sql += " ORDER BY status, column_order, id"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        return [self._row_to_task(r, eager_links=True) for r in rows]
+        return [
+            self._row_to_task(
+                r, eager_links=True, eager_history=eager_history, eager_tree=eager_tree
+            )
+            for r in rows
+        ]
 
     def get_task(self, task_id: str) -> Task | None:
         with self._lock:
@@ -372,7 +413,9 @@ class Store:
             ).fetchone()
         if not row:
             return None
-        return self._row_to_task(row, eager_links=True, eager_history=True)
+        return self._row_to_task(
+            row, eager_links=True, eager_history=True, eager_tree=True
+        )
 
     def board(self) -> dict[str, list[Task]]:
         """Group tasks by status, in column order."""
@@ -956,6 +999,7 @@ class Store:
         *,
         eager_links: bool = False,
         eager_history: bool = False,
+        eager_tree: bool = False,
     ) -> Task:
         t = Task(
             id=row["id"],
@@ -971,6 +1015,8 @@ class Store:
             moved_at=row["moved_at"],
             column_order=row["column_order"],
             project_id=row["project_id"] if "project_id" in row.keys() else DEFAULT_PROJECT_ID,
+            parent_id=row["parent_id"] if "parent_id" in row.keys() else None,
+            kind=row["kind"] if "kind" in row.keys() else "task",
         )
         if eager_links:
             link_rows = self._conn.execute(
@@ -1000,6 +1046,33 @@ class Store:
                 )
                 for r in h_rows
             ]
+        if eager_tree:
+            child_row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ?", (t.id,)
+            ).fetchone()
+            t.children_count = int(child_row["n"])
+            chain: list[dict[str, Any]] = []
+            pid = t.parent_id
+            while pid:
+                prow = self._conn.execute(
+                    "SELECT id, kind, title, description, acceptance, parent_id"
+                    " FROM tasks WHERE id = ?",
+                    (pid,),
+                ).fetchone()
+                if not prow:
+                    break
+                chain.append(
+                    {
+                        "id": prow["id"],
+                        "kind": prow["kind"],
+                        "title": prow["title"],
+                        "description": prow["description"],
+                        "acceptance": prow["acceptance"],
+                    }
+                )
+                pid = prow["parent_id"]
+            chain.reverse()  # root (epic) first
+            t.ancestors = chain
         return t
 
     def close(self) -> None:

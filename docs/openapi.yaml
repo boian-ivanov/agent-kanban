@@ -42,6 +42,14 @@ paths:
   /api/board:
     get:
       summary: Get Board
+      description: 'Board grouped by status.
+
+
+        ``include=full`` returns full card payloads (description, acceptance,
+
+        comments, ancestors, parent_id, ...) for every task instead of the
+
+        compact summary fields.'
       operationId: get_board_api_board_get
       parameters:
       - name: project
@@ -53,6 +61,15 @@ paths:
           default: default
           title: Project
         description: project_id
+      - name: include
+        in: query
+        required: false
+        schema:
+          type: string
+          description: summary|full — full returns the complete card payload
+          default: summary
+          title: Include
+        description: summary|full — full returns the complete card payload
       responses:
         '200':
           description: Successful Response
@@ -392,6 +409,107 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks:
+    get:
+      summary: List Tasks Api
+      description: 'Filterable task list (summary cards), sorted by status/column_order.
+
+
+        Replaces per-task fetching for agents: project/status/assignee/parent_id
+
+        and last-updated filters in a single request.'
+      operationId: list_tasks_api_api_tasks_get
+      parameters:
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: project_id filter
+          title: Project
+        description: project_id filter
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: status filter
+          title: Status
+        description: status filter
+      - name: assignee
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: assignee filter
+          title: Assignee
+        description: assignee filter
+      - name: parent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: parent_id filter
+          title: Parent Id
+        description: parent_id filter
+      - name: updated_since
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: ISO8601 — only tasks with a history entry at or after this
+            timestamp
+          title: Updated Since
+        description: ISO8601 — only tasks with a history entry at or after this timestamp
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Tasks Api Api Tasks Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      summary: Create Task
+      operationId: create_task_api_tasks_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Task Api Tasks Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/tasks/{task_id}:
     get:
       summary: Get Task
@@ -449,31 +567,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /api/tasks:
-    post:
-      summary: Create Task
-      operationId: create_task_api_tasks_post
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskCreate'
-        required: true
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                additionalProperties: true
-                type: object
-                title: Response Create Task Api Tasks Post
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
   /api/tasks/{task_id}/move:
     post:
       summary: Move Task
@@ -500,6 +593,38 @@ paths:
                 type: object
                 additionalProperties: true
                 title: Response Move Task Api Tasks  Task Id  Move Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/assign:
+    post:
+      summary: Assign Task
+      operationId: assign_task_api_tasks__task_id__assign_post
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Assign Task Api Tasks  Task Id  Assign Post
         '422':
           description: Validation Error
           content:
@@ -596,6 +721,35 @@ paths:
                 type: object
                 additionalProperties: true
                 title: Response Set Blockers Api Tasks  Task Id  Blockers Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/tasks/{task_id}/log/stream:
+    get:
+      summary: Stream Task Log
+      description: 'SSE endpoint: streams the agent log file for a task.
+
+
+        Sends existing content immediately, then polls for new lines every 500ms.
+
+        Closes when the log file is deleted (agent cleanup) or the client disconnects.'
+      operationId: stream_task_log_api_tasks__task_id__log_stream_get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -721,6 +875,15 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
+    AssignRequest:
+      properties:
+        assignee:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee
+      type: object
+      title: AssignRequest
     BlockersRequest:
       properties:
         blocker_ids:
@@ -817,6 +980,18 @@ components:
           - type: string
           - type: 'null'
           title: Path
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+        code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code
+          description: ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); None =
+            legacy T-### ids
       type: object
       required:
       - id
@@ -849,6 +1024,18 @@ components:
           - type: string
           - type: 'null'
           title: Path
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+        code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code
+          description: ticket id prefix, uppercase 1-4 chars (e.g. AK, SP); None leaves
+            it unchanged, "" clears back to legacy T-### ids
       type: object
       title: ProjectUpdate
     SourceGitRequest:
@@ -909,6 +1096,11 @@ components:
           - type: string
           - type: 'null'
           title: External Blocker
+        assignee:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee
         links:
           items:
             additionalProperties:
@@ -956,6 +1148,11 @@ components:
           - type: string
           - type: 'null'
           title: External Blocker
+        assignee:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee
       type: object
       title: TaskUpdate
     ValidationError:
