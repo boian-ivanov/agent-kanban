@@ -32,7 +32,7 @@
   --fg:            #E6ECF5;   /* primary text on panel */
   --fg-strong:     #FFFFFF;   /* headings on panel */
   --fg-muted:      #94A3B8;   /* muted text on panel */
-  --backdrop:      rgba(10, 25, 50, 0.55);
+  --backdrop:      rgba(10, 25, 50, 0.80);
 
   /* Cards — fixed light surface across both themes
    * (task cards are white everywhere, like sticky notes on a wall).
@@ -58,7 +58,7 @@
   --fg:            #0F1F3D;
   --fg-strong:     #0F1F3D;
   --fg-muted:      #5C6B82;
-  --backdrop:      rgba(15, 31, 61, 0.35);
+  --backdrop:      rgba(15, 31, 61, 0.80);
   --shadow:        0 1px 2px rgba(15, 31, 61, 0.06), 0 4px 12px rgba(15, 31, 61, 0.08);
 }
 
@@ -1371,7 +1371,7 @@ input.field--error {
   --fg:            #e6f1ff;
   --fg-strong:     #FFFFFF;
   --fg-muted:      #8a9bbd;
-  --backdrop:      rgba(6, 7, 13, 0.70);
+  --backdrop:      rgba(6, 7, 13, 0.80);
   --red:           #ff2d92;
   --red-soft:      rgba(255, 45, 146, 0.14);
   --accent-soft:   rgba(0, 240, 255, 0.14);
@@ -1482,7 +1482,7 @@ input.field--error {
   --fg:            #ede2c8;
   --fg-strong:     #FFF8E8;
   --fg-muted:      #c8b896;
-  --backdrop:      rgba(13, 26, 35, 0.70);
+  --backdrop:      rgba(13, 26, 35, 0.80);
   --red:           #c98152;
   --red-soft:      rgba(201, 129, 82, 0.14);
   --accent-soft:   rgba(201, 129, 82, 0.18);
