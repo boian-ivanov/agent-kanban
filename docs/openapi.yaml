@@ -1362,6 +1362,14 @@ components:
           title: Constraints
           description: per-project agent constraint strings (the project's repo gate);
             None = legacy boards / no project-specific gate
+        worktrees:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Worktrees
+          description: worktree lane config {enabled, root, base_branch, count, setup[]};
+            None = one shared worktree (project.path)
       type: object
       required:
       - id
@@ -1416,6 +1424,14 @@ components:
           description: per-project agent constraint strings; None leaves it unchanged,
             [] clears back to no project gate (driver falls back to the generic repo-gate
             instruction)
+        worktrees:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Worktrees
+          description: 'worktree lane config; None leaves it unchanged, {"enabled":
+            false} turns lane mode off'
       type: object
       title: ProjectUpdate
     RunRequest:
@@ -1460,6 +1476,13 @@ components:
           - type: integer
           - type: 'null'
           title: Control Port
+        worktree:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Worktree
+          description: worktree the run uses (lane path); verifiers resolve the implementer's
+            lane from it
       type: object
       title: RunRequest
     SourceGitRequest:

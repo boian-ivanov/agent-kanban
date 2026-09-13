@@ -7,7 +7,7 @@ Endpoints (v2):
     GET    /api/board?project=&include=  — tasks of a project + column meta (include=full → full payloads)
     GET    /api/projects              — list of projects with task_counts
     POST   /api/projects              — create a project
-    PATCH  /api/projects/{id}         — update (name/color/icon/sort_order/path/model/code/constraints)
+    PATCH  /api/projects/{id}         — update (name/color/icon/sort_order/path/model/code/constraints/worktrees)
     POST   /api/projects/{id}/archive — archive (toggle)
     GET    /api/tasks/{task_id}/context — agent context bundle (task + ancestors + comments + children summary + constraints)
     GET    /api/tasks/{task_id}/children?include=  — direct children (summary|full cards)
@@ -220,6 +220,11 @@ class RunRequest(BaseModel):
     status: str | None = None
     tokens_used: int | None = None
     control_port: int | None = None
+    worktree: str | None = Field(
+        None,
+        description="worktree the run uses (lane path); verifiers resolve "
+        "the implementer's lane from it",
+    )
 
 
 class AgentStopRequest(BaseModel):
@@ -255,6 +260,11 @@ class ProjectCreate(BaseModel):
         description="per-project agent constraint strings (the project's "
         "repo gate); None = legacy boards / no project-specific gate",
     )
+    worktrees: dict[str, Any] | None = Field(
+        None,
+        description="worktree lane config {enabled, root, base_branch, "
+        "count, setup[]}; None = one shared worktree (project.path)",
+    )
 
 
 class ProjectUpdate(BaseModel):
@@ -274,6 +284,11 @@ class ProjectUpdate(BaseModel):
         description="per-project agent constraint strings; None leaves it "
         "unchanged, [] clears back to no project gate (driver falls back "
         "to the generic repo-gate instruction)",
+    )
+    worktrees: dict[str, Any] | None = Field(
+        None,
+        description="worktree lane config; None leaves it unchanged, "
+        '{"enabled": false} turns lane mode off',
     )
 
 
@@ -426,6 +441,7 @@ def create_project(req: ProjectCreate) -> dict[str, Any]:
             model=req.model or None,
             code=code,
             constraints=req.constraints,
+            worktrees=req.worktrees,
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -451,6 +467,7 @@ def update_project(project_id: str, req: ProjectUpdate) -> dict[str, Any]:
             model=req.model or "",
             code=code,
             constraints=req.constraints,
+            worktrees=req.worktrees,
         )
     except KeyError:
         raise HTTPException(404, f"project {project_id} not found")
@@ -1134,6 +1151,7 @@ def register_run(task_id: str, req: RunRequest) -> dict[str, Any]:
         "status": req.status,
         "tokens_used": req.tokens_used,
         "control_port": req.control_port,
+        "worktree": req.worktree,
     }
     try:
         run = _store.register_run(task_id, **fields)

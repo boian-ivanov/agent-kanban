@@ -158,6 +158,28 @@ restart needed.
 
 ---
 
+### Step 6 — (optional) one worktree per card
+
+By default every card runs in the project's single checkout. Turn on lanes and
+each card gets its own git worktree + branch (`task/<card-id>`), so two agents
+can never touch the same files:
+
+```bash
+curl -s -X PATCH http://127.0.0.1:7777/api/projects/my-project \
+  -H 'Content-Type: application/json' \
+  -d '{"worktrees": {"enabled": true, "root": "/abs/path/my-project-lanes",
+                     "base_branch": "main", "count": 2,
+                     "setup": ["bun install --frozen-lockfile"]}}'
+```
+
+`setup` runs once per created lane (install, codegen, lane-local DB) — the
+dispatch aborts with a card comment if it fails. No `worktrees` config means
+the shared checkout, unchanged. Release a lane after merging its branch:
+`examples/lane-release.sh <project> <card>` (`--check` lists lane state,
+refuses a dirty or unmerged lane). Full reference: [docs/INTEGRATION.md](docs/INTEGRATION.md).
+
+---
+
 ## What's next
 
 - [`README.md`](README.md) — features, env vars, project layout

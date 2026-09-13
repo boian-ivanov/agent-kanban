@@ -1,13 +1,14 @@
 ---
 name: kanban-pipeline
-description: Orchestrate the agent-kanban ticket pipeline for the agent-kanban repo (dogfooding the board itself). Load when asked to monitor the board, run the work loop, verify finished agent work, commit & push task results, close tasks, dispatch the next ticket, or handle agent incidents (churn, dead sessions, watchdog false positives, destructive-git). Covers the driver-based dispatch protocol, the verifier-on-testing loop, commit conventions, sequencing, and incident handling.
+description: Orchestrate the agent-kanban ticket pipeline for the agent-kanban repo (dogfooding the board itself). Load when asked to monitor the board, run the work loop, verify finished agent work, commit & push task results, close tasks, dispatch the next ticket, run several cards in parallel lanes, or handle agent incidents (churn, dead sessions, watchdog false positives, destructive-git). Covers the driver-based dispatch protocol, worktree lanes, multi-card concurrency, the verifier-on-testing loop, commit conventions, sequencing, and incident handling.
 ---
 
 # Kanban Orchestration (agent-kanban repo)
 
 Run the dogfood loop: dispatch tickets on the `agent-kanban` project, monitor
 the driver-run agents, let the verifier check `testing` arrivals, then review,
-commit & push, close, and dispatch the next card.
+commit & push, close, and dispatch the next card — one at a time, or a disjoint
+batch when the project has lanes (see "Multiple tickets in flight").
 
 ## Board
 
@@ -83,11 +84,102 @@ commit & push, close, and dispatch the next card.
 - Server runs under `hub` name `akanban` (cwd repo root, env
   `KANBAN_ACTOR=omp KANBAN_AUTOMATION_INTERVAL=2`).
 
+## Worktree lanes (one card = one worktree)
+
+Implemented in `examples/task-driver.py` (its module docstring is the
+reference); opt-in per project, the same plumbing the salon pipeline uses.
+
+- **Identity**: branch `task/<task_id>` (`AK-003`) in a numbered dir under the
+  lane root — `<project.path>-lanes/<n>` by default. `git worktree list
+  --porcelain` is the only ledger; there is no registry file.
+- **Lifecycle**: the lane outlives the agent — implement → verify → commit →
+  merge → release all happen in it. A re-dispatched card (budget breach, dead
+  agent, verifier FAIL → `approved`) resumes its existing lane; never recycle
+  or remove a lane by hand.
+- **Verify runs in the implementer's lane**: `--mode verify` resolves
+  `task/<task_id>` but never creates one — a verifier must not produce the tree
+  it grades. No lane at verify time (pre-lane card, config added later) ⇒ it
+  grades the shared tree.
+- **Config is opt-in**: `projects.worktrees` on the board project row
+  (`{enabled, root, base_branch, count, setup[]}`; `PATCH /api/projects/{id}`),
+  with `kanban_data/worktrees.json` (this repo, gitignored) as the fallback for
+  a board whose API predates the field. **No config / `enabled: false` ⇒ the
+  shared tree at `project.path`, i.e. the pre-lane behaviour — which is where
+  `agent-kanban` itself is today (`worktrees: null`, 2026-09-13).**
+- **Dispatch failures are loud, not silent**: no free lane (`count` at
+  `examples/task-driver.py:543`, allocation under an `fcntl.flock`, `:553`) or
+  a failing `setup[]` command aborts the run with a card comment and leaves the
+  card in `approved`; the driver never falls back to the shared tree. Retry
+  when a lane is free.
+- **Lane setup** (declared in `setup[]`, run once per created lane): `uv sync`
+  — an uninstalled lane fails `pytest` with import errors that read like
+  product bugs.
+
+## Multiple tickets in flight (lane concurrency)
+
+Lanes make N cards at once possible. **You are the scheduler**: there is no
+dispatcher daemon, no automatic WIP cap, no automatic conflict-domain check and
+no per-lane DB automation — you read the board and the cards.
+
+1. **Prerequisite: lane mode on with `count >= 2`.** Verify before promising a
+   batch: `GET /api/projects` → the project row's `worktrees.count`, or
+   `examples/lane-release.sh <project> --check` (lane state: which lanes exist,
+   which are dirty, which are unmerged). **`agent-kanban` has no lane config
+   (`worktrees: null`), so this project is strictly one card at a time today** —
+   without lanes, NEVER run two cards: no config ⇒ one shared `project.path`
+   tree, and two agents in one tree is what lanes exist to prevent.
+2. **WIP cap = `min(count, 3)`.** Measured 2026-09-13 on this machine: one lane
+   at full tilt ≈ **1.7M tokens/min** at peak and load **~8.5 of 11 cores**, and
+   the repo gate is the load spike — past ~3 concurrent gates, load-induced
+   failures stop being distinguishable from real ones. `count` is a lane count,
+   not a load budget. When several gates run at once, stagger them; `pytest` is
+   single-process here, so there is no worker cap to set — do not oversubscribe
+   the box.
+3. **Choosing a batch — the conflict-domain rule (you enforce it by hand).**
+   Read each candidate's **`Touches:`** line (see `skill://kanban-tickets`);
+   two cards may run together **only if their `Touches` sets are disjoint**.
+   Serialize — never co-schedule — any card touching the same store/component
+   file as another card in flight, and in particular a second card touching
+   `examples/task-driver.py`, `kanban_store/store.py`, `kanban_store/schema.sql`
+   or the migration path. Dependency order still beats parallelism: a card whose
+   contract a sibling consumes goes first, and the consumer is dispatched only
+   after the producer is merged (a lane is cut from the committed base branch).
+4. **Dispatch**: comment on each chosen card which siblings run alongside it,
+   then move each to `approved` — every card gets **its own driver and its own
+   lane** (`task/<card_id>`). `in_progress` holding several cards at once is
+   then the expected state, not a stuck board.
+5. **Monitoring N runs — per card.** Per card: `GET /api/tasks/{id}/runs` → the
+   `pid` is alive and `worktree` names the lane that run used, plus the card's
+   log bytes (`kanban_data/agent-logs/<ID>.log`) over each 10-minute window.
+   The churn / dead-session / run-row rules in **Incident handling** apply
+   **per card** — a dead run bounces only that card, and a clean lane says
+   nothing about its siblings.
+6. **Verification is unchanged, and per card.** The verifier fires on that
+   card's `in_progress → testing` and gates + smokes inside that card's lane; it
+   never creates a lane.
+7. **The serial merge queue is the ONE serialization point.** Process verified
+   cards strictly one at a time — **never merge two lanes concurrently**:
+   gate (`uv run pytest tests/`) + commit **inside the lane** → `git merge
+   --no-ff task/<card_id>` in the project tree → `git push origin main` →
+   `examples/lane-release.sh <project> <card_id>` → comment the hash, close the
+   card, refill that lane. `orchestrator.py --close` performs exactly this and
+   is lane-aware (`examples/orchestrator.py:26-48`, `merge_lane` at `:263`). A
+   merge conflict **stops the queue**: the lane stays intact, the unmerged files
+   are printed and the command exits non-zero — resolve it (or send the card
+   back to `approved` for a fix run in its lane) and **never release that
+   lane**.
+8. **Refill discipline.** Keep the pool full up to the cap from the ordered
+   backlog (dependency order, then ascending id). A finished card frees a lane;
+   it does not raise the cap.
+
 ## Sequencing
 
-- One agent at a time — the worktree is SHARED and persistent between runs;
-  concurrent agents corrupt each other's edits. Wait for a ticket to reach
-  `testing` (verifier phase included) before dispatching the next.
+- **Without lanes: one agent at a time** — the worktree is SHARED and persistent
+  between runs; concurrent agents corrupt each other's edits. Wait for a ticket
+  to reach `testing` (verifier phase included) before dispatching the next.
+  `agent-kanban` has no lane config today, so this is the rule in force here;
+  with lanes on, disjoint cards in separate lanes may run together (see
+  "Multiple tickets in flight").
 - Dependency order: tickets that extend the same file (e.g. driver) must run
   sequentially; AK-002 before AK-003 (both touch `task-driver.py`).
 - `approved` = dispatch trigger — only the user or the orchestrator decides.

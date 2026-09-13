@@ -292,6 +292,40 @@ The hierarchy exists so dispatched agents get the FULL context of their ticket:
   dot-output detection. Before any interrupt the driver re-verifies it still
   owns the run row (non-owner never touches the board).
 
+### Worktree lanes (one worktree per card)
+
+Optional per project. With lanes on, each card runs in its own git worktree on
+branch `task/<card-id>` instead of the project's shared checkout, so two
+agents on two cards can never touch the same files.
+
+- **Config** lives on the project row — `PATCH /api/projects/{id}` with
+  `{"worktrees": {"enabled": true, "root": "/abs/path/lanes", "base_branch": "main", "count": 2, "setup": ["bun install --frozen-lockfile"]}}`
+  (also on `POST /api/projects`, returned by `GET /api/board?project=…` and
+  `GET /api/projects`). `worktrees = NULL` means the shared `project.path`
+  tree, i.e. the pre-lane behaviour.
+- **Identity is the branch** `task/<card-id>`, found with
+  `git worktree list --porcelain`; there is no registry file. A card that is
+  re-dispatched (budget breach, dead agent, verifier FAIL → `approved`)
+  **resumes its own lane** instead of starting clean.
+- **Allocation** is serialised with `fcntl.flock` on `<root>/.lanes.lock`
+  (macOS ships no `flock(1)`); the registered worktree is the reservation.
+  With no free lane the dispatch aborts, comments why, and leaves the card in
+  `approved`.
+- **Setup** commands run once per created lane, by the driver, with the output
+  in `kanban_data/agent-logs/<card>.log`. A non-zero exit aborts the dispatch
+  — an unbootstrapped lane produces gate failures that read like bugs.
+- **The verifier resolves the implementer's lane** and never creates one: a
+  verifier must not be the thing that produces the tree it grades.
+- **Runs record the path**: `GET /api/tasks/{id}/runs` → `run.worktree`.
+- **Release** happens after the branch is merged:
+  `examples/lane-release.sh <project_id> <card_id>` (refuses a dirty or
+  unmerged lane; `--force` is explicit data loss).
+  `examples/lane-release.sh <project_id> --check` lists lane state.
+- **Constraints worth knowing**: lanes branch from the *committed* base
+  branch, so the previous card must be committed before the next dispatch;
+  agents must never run `git worktree add/remove/prune` — the driver owns the
+  lane lifecycle.
+
 ### Verification agent (T-314)
 
 A task arriving in `testing` fires `examples/launch-verifier.sh`; the verifier

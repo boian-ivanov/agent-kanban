@@ -95,6 +95,29 @@ Static OpenAPI schema: [`docs/openapi.yaml`](docs/openapi.yaml). Interactive Swa
 
 Real-world flows: [`docs/USECASES.md`](docs/USECASES.md) — 11 use cases (solo dev, team Slack, legacy import, multi-project, agent session, auto-launch, etc.).
 
+## Worktree lanes (optional)
+
+One card, one git worktree, one branch — so two agents on two cards can never
+touch the same files. Off by default: a project with no lane config keeps
+running in its single `project.path` checkout exactly as before.
+
+```bash
+curl -s -X PATCH http://127.0.0.1:7777/api/projects/my-project \
+  -H 'Content-Type: application/json' \
+  -d '{"worktrees": {"enabled": true, "root": "/abs/path/my-project-lanes",
+                     "base_branch": "main", "count": 2,
+                     "setup": ["bun install --frozen-lockfile"]}}'
+```
+
+- Identity is the branch `task/<card-id>` (`git worktree list --porcelain` is
+  the only ledger); a re-dispatched card resumes its own lane.
+- Allocation is serialised with `fcntl.flock`; with no free lane the dispatch
+  aborts, comments why, and leaves the card in `approved`.
+- The verifier resolves the implementer's lane and never creates one.
+- `examples/lane-release.sh <project> <card>` releases a lane after the branch
+  is merged (refuses a dirty or unmerged lane; `--check` lists lane state).
+- Full reference: [docs/INTEGRATION.md](docs/INTEGRATION.md) § Worktree lanes.
+
 ## Why
 
 - **vs. Trello/Jira/Linear** — local-first; no SaaS account, no rate limits, your data on your disk.

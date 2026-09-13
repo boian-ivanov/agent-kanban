@@ -86,7 +86,7 @@ def test_migrate_v5_to_v6_lossless(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()["value"]
-            == "8"
+            == "9"
         )
 
         # tasks columns added
@@ -139,7 +139,7 @@ def test_migrate_v6_idempotent(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "8"
+            == "9"
         )
     finally:
         conn.close()
@@ -154,7 +154,7 @@ def test_fresh_db_is_v7(tmp_path):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()[0]
-            == "8"
+            == "9"
         )
         cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
         assert {"parent_id", "kind"} <= cols
@@ -182,7 +182,7 @@ def test_migrate_v5_to_v8_adds_constraints(tmp_path, monkeypatch):
             conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()["value"]
-            == "8"
+            == "9"
         )
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
         assert {"code", "constraints", "model", "path"} <= cols
@@ -223,3 +223,102 @@ def test_project_constraints_roundtrip(tmp_path):
     plain = store.create_project("plain", "Plain")
     assert plain.constraints is None
     assert plain.to_public()["constraints"] is None
+
+
+def test_migrate_v8_to_v9_adds_worktrees(tmp_path):
+    """v9: projects.worktrees + task_runs.worktree, additive and idempotent."""
+    db = tmp_path / "v8.db"
+    # A v8 database: projects + task_runs without the lane columns.
+    conn = sqlite3.connect(str(db))
+    conn.executescript(V5_SCHEMA)
+    conn.executescript(
+        """
+        CREATE TABLE task_runs (
+            task_id      TEXT PRIMARY KEY,
+            pid          INTEGER,
+            started_at   TEXT,
+            ended_at     TEXT,
+            model        TEXT,
+            role         TEXT,
+            status       TEXT,
+            tokens_used  INTEGER,
+            control_port INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '8');
+        """
+    )
+    conn.execute(
+        "INSERT INTO projects (id, name, created_at) VALUES ('p', 'P', '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO tasks (id, title, status, created_at, moved_at) "
+        "VALUES ('T-001', 'legacy task', 'done', '2026-01-01', '2026-01-02')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(db)  # runs the migrations
+    store.register_run("T-001", worktree="/tmp/lane/1", status="running")
+    run = store.get_run("T-001")
+    assert run["worktree"] == "/tmp/lane/1"
+
+    # projects.worktrees is NULL on a migrated project (lane mode off) and
+    # round-trips once set — the driver reads it to decide shared vs lane.
+    assert store.get_project("p").worktrees is None
+    updated = store.update_project(
+        "p", worktrees={"enabled": True, "root": "/tmp/lanes", "count": 2}
+    )
+    assert updated.worktrees == {"enabled": True, "root": "/tmp/lanes", "count": 2}
+    assert updated.to_public()["worktrees"]["count"] == 2
+
+    # idempotent: a second open neither errors nor resets the config
+    again = Store(db)
+    assert again.get_project("p").worktrees["enabled"] is True
+
+    conn = sqlite3.connect(str(db))
+    try:
+        assert (
+            conn.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()[0]
+            == "9"
+        )
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
+        assert "worktrees" in cols
+        run_cols = {r[1] for r in conn.execute("PRAGMA table_info(task_runs)")}
+        assert "worktree" in run_cols
+    finally:
+        conn.close()
+
+
+def test_worktrees_corrupt_json_disables_lane_mode(tmp_path):
+    """Corrupt config must fail safe (shared tree), never enable lanes."""
+    db = tmp_path / "t.db"
+    store = Store(db)
+    store.create_project("p", "P")
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE projects SET worktrees='{not json' WHERE id='p'")
+    conn.commit()
+    conn.close()
+    assert Store(db).get_project("p").worktrees is None
+
+
+def test_project_worktrees_roundtrip(tmp_path):
+    """worktrees: set via create, overridable via update, None leaves it alone."""
+    store = Store(tmp_path / "t.db")
+    p = store.create_project(
+        "salon-platform",
+        "Salon Platform",
+        worktrees={"enabled": True, "root": "/tmp/sp-lanes", "count": 2},
+    )
+    assert p.worktrees == {"enabled": True, "root": "/tmp/sp-lanes", "count": 2}
+
+    p2 = store.update_project("salon-platform", worktrees={"enabled": False})
+    assert p2.worktrees == {"enabled": False}
+
+    p3 = store.update_project("salon-platform", name="Renamed")
+    assert p3.worktrees == {"enabled": False}
+
+    plain = store.create_project("plain", "Plain")
+    assert plain.worktrees is None

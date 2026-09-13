@@ -61,14 +61,24 @@ A verify run finishes when the task leaves testing (PASS -> done,
 FAIL -> approved, blocked only for human intervention — all moves made
 by the verifier agent itself).
 
+Worktree lanes (opt-in per project, ``kanban_data/worktrees.json`` or the
+board's ``projects.worktrees``): the session runs in a per-card git
+worktree on branch ``task/<task_id>`` instead of the shared project tree,
+so two agents never touch the same files. A re-dispatched card (budget
+breach, dead agent, verifier FAIL) resumes its existing lane; verifiers
+resolve the implementer's lane but never create one. No lane config at
+all => the shared tree, i.e. the pre-lane behaviour.
+
 Usage:
   task-driver.py --task-id T-310 --project-id agent-kanban [--base-url URL]
   task-driver.py --task-id T-314 --project-id agent-kanban --mode verify
+  task-driver.py --task-id T-310 --project-id agent-kanban --worktree /tmp/wt
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import queue
@@ -404,6 +414,193 @@ def _pid_alive(pid: Any) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Worktree lanes: one worktree + branch per card, so two agents never share a
+# working tree. Opt-in per project via board-owned runtime config at
+# kanban_data/worktrees.json (gitignored: no ticket diff, no merge conflict,
+# no API/schema change, so enabling lanes needs no board restart):
+#
+#   {"salon-platform": {"enabled": true,
+#                       "root": "~/Projects/salon-platform-lanes",
+#                       "base_branch": "master",
+#                       "count": 2,
+#                       "setup": ["bun install --frozen-lockfile",
+#                                 "bun run i18n:compile"]}}
+#
+# No file / no entry for the project -> the shared worktree (project.path),
+# i.e. byte-identical behaviour to the pre-lane pipeline. The branch
+# ``task/<task_id>`` IS the lane identity and ``git worktree list --porcelain``
+# is the only ledger, so a re-dispatched card (budget breach, dead agent,
+# verifier FAIL -> approved) resumes the lane it already owns instead of
+# silently starting clean. Verifiers resolve the same way but never create a
+# lane: a verifier must not be the thing that produces the tree it grades.
+# ---------------------------------------------------------------------------
+
+# Overridable (tests, scratch boards) so nothing but a real dispatch ever
+# touches the live config file.
+WORKTREES_JSON = Path(
+    os.environ.get("KANBAN_WORKTREES_JSON")
+    or REPO_ROOT / "kanban_data" / "worktrees.json"
+)
+LANE_LOCK_TIMEOUT_S = int(os.environ.get("KANBAN_LANE_LOCK_TIMEOUT") or 300)
+
+
+class LaneError(RuntimeError):
+    """Lane resolution failed: no free lane, git error, or setup failure."""
+
+
+def lane_branch(task_id: str) -> str:
+    """Lane identity: ``task/<task_id>`` (ids are ``[A-Z]{2}-\\d{3}``/``T-###``)."""
+    return f"task/{task_id}"
+
+
+def load_lane_config(project_id: str) -> dict[str, Any] | None:
+    """The ``worktrees.json`` entry for a project, or None (lane mode off).
+
+    Fallback path only: the board project row (``projects.worktrees``) is the
+    primary source — see :func:`lane_config`. Never raises: an unreadable or
+    corrupt file disables lane mode, which is the safe direction (the shared
+    worktree is the pre-lane behaviour).
+    """
+    if not WORKTREES_JSON.exists():
+        return None
+    try:
+        data = json.loads(WORKTREES_JSON.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    cfg = data.get(project_id)
+    if not isinstance(cfg, dict) or not cfg.get("enabled", True):
+        return None
+    return cfg
+
+
+def lane_config(project_id: str, board: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Lane config for a project, or None for the shared tree.
+
+    The board project row wins — the driver already fetched it for
+    ``path``/``model``/``constraints``, it is PATCH-able, and it is the field
+    operators and agents can see. ``kanban_data/worktrees.json`` remains the
+    fallback for a board whose API predates ``projects.worktrees``.
+    """
+    raw = (board or {}).get("worktrees")
+    if isinstance(raw, dict):
+        # An explicit {"enabled": false} on the row is authoritative: it must
+        # not be resurrected by a stale file entry.
+        return raw if raw.get("enabled", True) else None
+    return load_lane_config(project_id)
+
+
+def _git(repo: Path, *argv: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise LaneError(
+            f"git {' '.join(argv)} failed ({proc.returncode}): "
+            f"{proc.stderr.strip()}"
+        )
+    return proc.stdout
+
+
+def worktree_entries(repo: Path) -> list[tuple[Path, str | None]]:
+    """``[(path, branch)]`` from ``git worktree list --porcelain``."""
+    entries: list[tuple[Path, str | None]] = []
+    path: Path | None = None
+    branch: str | None = None
+    for line in _git(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            if path is not None:
+                entries.append((path, branch))
+            path, branch = Path(line[len("worktree ") :]), None
+        elif line.startswith("branch refs/heads/"):
+            branch = line[len("branch refs/heads/") :]
+    if path is not None:
+        entries.append((path, branch))
+    return entries
+
+
+def resolve_lane(
+    repo: Path, task_id: str, cfg: dict[str, Any], *, create: bool
+) -> tuple[Path, str, bool]:
+    """``(lane_path, branch, created)`` for a card, resuming before allocating.
+
+    Raises LaneError when the card has no lane and ``create`` is false, or
+    when every lane is taken.
+    """
+    branch = lane_branch(task_id)
+    for path, entry_branch in worktree_entries(repo):
+        if entry_branch == branch and path.exists():
+            return path, branch, False
+    if not create:
+        raise LaneError(f"no worktree on branch {branch}")
+    root = Path(cfg.get("root") or f"{repo}-lanes").expanduser()
+    base = str(cfg.get("base_branch") or "master")
+    count = max(int(cfg.get("count") or 1), 1)
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".lanes.lock"
+    with open(lock_path, "w", encoding="utf-8") as lock:
+        # macOS ships no flock(1); fcntl is the only mutual exclusion here.
+        # The lock only spans the allocation — the registered worktree is the
+        # reservation, so nothing has to be cleaned up if a driver dies.
+        deadline = time.monotonic() + LANE_LOCK_TIMEOUT_S
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise LaneError(f"lane lock busy for {LANE_LOCK_TIMEOUT_S}s: {lock_path}") from None
+                time.sleep(0.5)
+        try:
+            # Re-check under the lock: a peer may have created our branch
+            # between the resume probe above and acquiring the lock.
+            for path, entry_branch in worktree_entries(repo):
+                if entry_branch == branch and path.exists():
+                    return path, branch, False
+            taken = {path.resolve() for path, _ in worktree_entries(repo)}
+            for index in range(1, count + 1):
+                lane = root / str(index)
+                if lane.resolve() in taken or lane.exists():
+                    continue
+                _git(repo, "worktree", "add", "-b", branch, str(lane), base)
+                return lane, branch, True
+            busy = ", ".join(
+                f"{path.name}:{entry_branch or 'detached'}"
+                for path, entry_branch in worktree_entries(repo)
+                if path.resolve().parent == root.resolve()
+            )
+            raise LaneError(
+                f"no free lane in {root} (count={count})"
+                + (f"; busy: {busy}" if busy else "")
+            )
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def run_lane_setup(lane: Path, cfg: dict[str, Any], log_line: Callable[[str], None]) -> None:
+    """Project-declared lane bootstrap, once per created lane.
+
+    Owner-authored command list (install, i18n compile, lane-local D1). A
+    non-zero exit aborts the dispatch with the failing output in the agent
+    log — an unbootstrapped lane produces gate failures that read like
+    product bugs.
+    """
+    for cmd in cfg.get("setup") or []:
+        log_line(f"lane setup: {cmd}")
+        proc = subprocess.run(
+            str(cmd), shell=True, cwd=str(lane), capture_output=True, text=True
+        )
+        tail = ((proc.stdout or "") + (proc.stderr or ""))[-2000:]
+        log_line(f"lane setup exit={proc.returncode}\n{tail}")
+        if proc.returncode != 0:
+            raise LaneError(f"lane setup failed (exit {proc.returncode}): {cmd}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="per-task agent driver")
     parser.add_argument("--task-id", required=True)
@@ -442,6 +639,12 @@ def main() -> int:
         "it to count as churn (0 = silence alone breaches; default scales "
         "with the window: 400K tokens/min of silent burn, e.g. 2M for the "
         "300s window)",
+    )
+    parser.add_argument(
+        "--worktree",
+        default=None,
+        help="run the session in this directory (overrides the project's "
+        "worktree/lane resolution; for tests and manual runs)",
     )
     parser.add_argument(
         "--mode",
@@ -521,11 +724,67 @@ def main() -> int:
         worktree = board["path"]
     if board.get("model"):
         model = board["model"]
+
+    # --- worktree lanes (opt-in per project): one worktree per card, so two
+    # agents never share a working tree. No lane config (projects.worktrees
+    # NULL / no worktrees.json entry) => the shared project tree, exactly as
+    # before. Verifiers resolve the implementer's lane but never create one:
+    # a verifier must not be the thing that produces the tree it grades. ---
+    def lane_fail(text: str) -> int:
+        """Abort a lane-configured dispatch, leaving the card for the owner.
+
+        Never run a lane-declared card in the shared tree: two agents in one
+        tree is precisely the failure lanes exist to prevent.
+        """
+        log_line(text)
+        try:
+            api_json(
+                args.base_url,
+                "POST",
+                f"/api/tasks/{args.task_id}/comment",
+                {"text": text},
+            )
+        except ApiError as e:
+            log_line(f"lane failure comment failed: {e}")
+        return 5
+
+    lane_name: str | None = None
+    if args.worktree:
+        worktree = args.worktree
+        log_line(f"worktree forced by --worktree: {worktree}")
+    else:
+        lane_cfg = lane_config(args.project_id, board)
+        if lane_cfg:
+            try:
+                lane, lane_name, created = resolve_lane(
+                    Path(worktree), args.task_id, lane_cfg, create=args.mode == "work"
+                )
+            except LaneError as e:
+                if args.mode == "work":
+                    return lane_fail(
+                        f"Lane dispatch failed: {e}. The card stays in approved "
+                        f"— retry when a lane is free."
+                    )
+                # verify: the card has no lane (shared-tree run, or config
+                # added after the work happened) — grade the project tree.
+                log_line(f"no lane for {args.task_id} ({e}); verifying {worktree}")
+            else:
+                worktree = str(lane)
+                if created:
+                    log_line(f"lane created: {worktree} (branch {lane_name})")
+                    try:
+                        run_lane_setup(Path(worktree), lane_cfg, log_line)
+                    except LaneError as e:
+                        return lane_fail(
+                            f"Lane setup failed: {e}. The card stays in "
+                            f"approved; fix the setup command and retry."
+                        )
     Path(worktree).mkdir(parents=True, exist_ok=True)
 
     log_line(
         f"omp dispatch for {args.task_id} ({args.project_id}) role={role} "
         f"model={model} worktree={worktree}"
+        + (f" lane={lane_name}" if lane_name else "")
     )
 
     if args.mode == "verify":
@@ -622,6 +881,7 @@ def main() -> int:
                 "role": role,
                 "control_port": control.port,
                 "status": "running",
+                "worktree": worktree,
             },
         )
     except ApiError as e:
@@ -697,6 +957,14 @@ def main() -> int:
     constraints = "\n".join(
         f"- {c}" for c in [*global_constraints, *project_constraints]
     )
+    if lane_name:
+        constraints += (
+            f"\n- This card owns the git worktree {worktree} on branch "
+            f"{lane_name}; other cards run in their own worktrees. Stay inside "
+            f"it: never create, remove or prune worktrees, never touch another "
+            f"worktree, and never commit or push — the board owner merges this "
+            f"branch after verification."
+        )
 
     if args.mode == "verify":
         prompt_text = (

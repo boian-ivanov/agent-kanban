@@ -24,7 +24,7 @@ concurrent styles.css ticket).
 ```json
 {
   "title": "fix: <area> <verb-phrase>",
-  "description": "User report + reproduction evidence + root cause (commit/rule) + fix hint",
+  "description": "User report + reproduction evidence + root cause (commit/rule) + fix hint\n\nTouches: kanban_ui/main.py, tests/test_project_ids.py",
   "acceptance": "Falsifiable criteria — what 'done' means, how it's checked",
   "status": "backlog", "priority": "high|normal|low", "size": "S|M",
   "project_id": "agent-kanban"
@@ -36,9 +36,22 @@ concurrent styles.css ticket).
 - `priority: high` = broken/regression (like the modal); `normal` = features.
 - **Never** create with `status: approved` — that auto-dispatches the work
   agent. The user or the orchestrator dispatches deliberately.
-- Cards that touch the same file as a RUNNING ticket (e.g. styles.css while
-  another card edits it) must be queued AFTER it — the worktree is shared,
-  one agent edits at a time.
+- **Every new card MUST carry a machine-readable `Touches:` line** — the last
+  line of `description`: `Touches: <comma-separated paths or areas>`, e.g.
+  `Touches: kanban_ui/main.py, tests/test_project_ids.py`. Use real repo paths
+  or named areas. It is what makes the card **schedulable next to another one**:
+  two cards run at once only if their `Touches` sets are disjoint, and a card
+  whose `Touches` overlap anything in flight is serialized instead (see
+  `skill://kanban-pipeline` → "Multiple tickets in flight").
+- Cards that touch the same file must never run together. With worktree lanes
+  on (per-card worktree on branch `task/<card_id>` — `projects.worktrees` on the
+  project row, see `skill://kanban-pipeline` → "Worktree lanes") disjoint cards
+  run in parallel, each in its own tree; **without lanes the worktree is SHARED
+  and one agent edits at a time**, so a card touching a running card's file is
+  queued AFTER it. `agent-kanban` has no lane config yet (`worktrees: null`), so
+  today every such card is queued. Hot files to check first:
+  `examples/task-driver.py`, `kanban_store/store.py`, `kanban_store/schema.sql`,
+  migrations.
 - Include the exact fix when the cause is a deleted/changed rule (the agent
   restoring it will use your diff verbatim).
 

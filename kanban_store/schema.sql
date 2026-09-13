@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS projects (
     model       TEXT,                                -- omp model override (e.g. "deepinfra/deepseek-v4-flash")
     code        TEXT,                                -- ticket id prefix (upper, e.g. AK/SP/NM); NULL = legacy T-###
     constraints TEXT,                                -- JSON list of agent constraint strings (project-specific gate)
+    worktrees   TEXT,                                -- JSON lane config: {enabled,root,base_branch,count,setup[]} (v9)
     created_at  TEXT NOT NULL                        -- ISO8601
 );
 
@@ -74,7 +75,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     role         TEXT,                               -- agent role (default/fe/be/...)
     status       TEXT,                               -- running/done/failed/...
     tokens_used  INTEGER,
-    control_port INTEGER
+    control_port INTEGER,
+    worktree     TEXT                                -- lane worktree this run used (v9)
 );
 
 CREATE TABLE IF NOT EXISTS task_history (

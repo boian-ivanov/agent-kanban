@@ -129,6 +129,7 @@ class Project:
     archived: bool
     created_at: str
     constraints: list[str] | None = None
+    worktrees: dict[str, Any] | None = None
     path: str | None = None
     model: str | None = None
     code: str | None = None
@@ -165,6 +166,23 @@ def _parse_constraints(row: sqlite3.Row) -> list[str] | None:
     except ValueError:
         return []
     return list(parsed) if isinstance(parsed, list) else []
+
+
+def _parse_worktrees(row: sqlite3.Row) -> dict[str, Any] | None:
+    """Parse the projects.worktrees JSON object (v9).
+
+    NULL -> None (lane mode off; the driver runs in the shared project tree),
+    object -> dict (lane mode on for this project), corrupt/other JSON ->
+    None (fail safe: an unreadable config must not silently enable lanes).
+    """
+    raw = row["worktrees"] if "worktrees" in row.keys() else None
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 class Store:
@@ -204,6 +222,35 @@ class Store:
             self._migrate_v6()
             self._migrate_v7()
             self._migrate_v8()
+            self._migrate_v9()
+
+    def _migrate_v9(self) -> None:
+        """v8 → v9: worktree lanes.
+
+        ``projects.worktrees`` (JSON object: root/base_branch/count/setup —
+        the per-project lane config the driver reads to run one card per
+        worktree) and ``task_runs.worktree`` (the lane path a run used, so
+        verification resolves the same tree). Both are additive: an old
+        board ignores them, and a project with NULL ``worktrees`` keeps
+        today's single shared worktree.
+
+        Idempotent: checks PRAGMA table_info before running ALTER.
+        """
+        cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
+        if "worktrees" not in cols:
+            self._conn.execute("ALTER TABLE projects ADD COLUMN worktrees TEXT")
+        run_cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(task_runs)").fetchall()
+        }
+        if run_cols and "worktree" not in run_cols:
+            self._conn.execute("ALTER TABLE task_runs ADD COLUMN worktree TEXT")
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        if row and int(row["value"]) < 9:
+            self._conn.execute("UPDATE meta SET value='9' WHERE key='schema_version'")
 
     def _migrate_v8(self) -> None:
         """v7 → v8: projects.constraints (JSON list of per-project agent
@@ -877,11 +924,13 @@ class Store:
         status: str | None = None,
         tokens_used: int | None = None,
         control_port: int | None = None,
+        worktree: str | None = None,
     ) -> dict[str, Any]:
         """Upsert a task_runs row: only the provided fields are written.
 
         Called by the driver at start (pid/started_at/model/role/
-        control_port/status) and on exit (ended_at/status/tokens_used).
+        control_port/status/worktree) and on exit (ended_at/status/
+        tokens_used).
         """
         provided = {
             k: v
@@ -894,6 +943,7 @@ class Store:
                 ("status", status),
                 ("tokens_used", tokens_used),
                 ("control_port", control_port),
+                ("worktree", worktree),
             )
             if v is not None
         }
@@ -1068,6 +1118,7 @@ class Store:
         model: str | None = None,
         code: str | None = None,
         constraints: list[str] | None = None,
+        worktrees: dict[str, Any] | None = None,
     ) -> Project:
         ts = _now()
         with self._lock:
@@ -1083,8 +1134,8 @@ class Store:
                 self._conn.execute(
                     """INSERT INTO projects
                        (id, name, color, icon, sort_order, archived, path, model,
-                        code, constraints, created_at)
-                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)""",
+                        code, constraints, worktrees, created_at)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)""",
                     (
                         project_id,
                         name,
@@ -1095,6 +1146,7 @@ class Store:
                         model,
                         code,
                         json.dumps(constraints) if constraints is not None else None,
+                        json.dumps(worktrees) if worktrees is not None else None,
                         ts,
                     ),
                 )
@@ -1118,6 +1170,7 @@ class Store:
         model: str | None = None,
         code: str | None = None,
         constraints: list[str] | None = None,
+        worktrees: dict[str, Any] | None = None,
     ) -> Project:
         sets: list[str] = []
         params: list[Any] = []
@@ -1146,6 +1199,11 @@ class Store:
             # untouched (NULL = unset -> driver falls back to the seed).
             sets.append("constraints = ?")
             params.append(json.dumps(constraints) if constraints is not None else None)
+        if worktrees is not None:
+            # {"enabled": false} turns lane mode off without clearing the
+            # other settings; the column is never NULLed from here.
+            sets.append("worktrees = ?")
+            params.append(json.dumps(worktrees))
         if not sets:
             p = self.get_project(project_id)
             if p is None:
@@ -1264,6 +1322,7 @@ class Store:
         constraints = (
             _parse_constraints(row) if "constraints" in row.keys() else None
         )
+        worktrees = _parse_worktrees(row)
         return Project(
             id=row["id"],
             name=row["name"],
@@ -1276,6 +1335,7 @@ class Store:
             model=row["model"] if "model" in row.keys() else None,
             code=row["code"] if "code" in row.keys() else None,
             constraints=constraints,
+            worktrees=worktrees,
         )
 
     # Snapshot
