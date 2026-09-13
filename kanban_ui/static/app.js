@@ -518,6 +518,45 @@ async function handleDrop(evt) {
 // Holds the active EventSource for agent log streaming, if any.
 let agentLogSource = null;
 
+// Agent log rendering (2026-09-13). The raw driver log reads as an EMPTY
+// panel even while an agent works hard, for two reasons that are both
+// faithful: the driver writes a newline after every completed message (that
+// growth is load-bearing for the no-progress watchdog, so it stays) and a
+// tool-heavy run emits very little assistant TEXT — measured on SP-049: 285
+// lines, 61 non-blank. So the renderer collapses blank-line runs, dims the
+// driver's own [timestamp] lines so the agent's text stands out, keeps only
+// the tail of a long log in the DOM, and pins the view to the bottom only
+// while the reader is already there.
+const LOG_TAIL_CHARS = 200_000;
+const LOG_PIN_SLACK_PX = 24;
+
+function normalizeLogText(text) {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n") // 3+ newlines (blank runs from message ends) -> one blank line
+    .replace(/^\n+/, "");
+}
+
+function appendLogLines(logEl, text, { infra = true } = {}) {
+  const lines = normalizeLogText(text).split("\n");
+  for (const line of lines) {
+    if (infra && /^\[\d{4}-\d{2}-\d{2}T/.test(line)) {
+      const span = document.createElement("span");
+      span.className = "log-infra";
+      span.textContent = line + "\n";
+      logEl.appendChild(span);
+    } else {
+      logEl.appendChild(document.createTextNode(line + "\n"));
+    }
+  }
+}
+
+function renderLogText(logEl, text) {
+  logEl.textContent = "";
+  appendLogLines(logEl, text);
+}
+
 async function openTaskModal(taskId) {
   let t;
   try {
@@ -565,6 +604,7 @@ async function openTaskModal(taskId) {
     logEl.innerHTML = "";
     dotEl.className = "agent-dot agent-dot--live";
     let logStarted = false;  // skip leading blank lines until first content
+    let logText = "";        // accumulated, re-rendered through the normalizer
     agentLogSource = new EventSource(`/api/tasks/${t.id}/log/stream`);
     agentLogSource.onmessage = (e) => {
       try {
@@ -579,15 +619,23 @@ async function openTaskModal(taskId) {
           // Append new lines, remove the placeholder
           const placeholder = logEl.querySelector(".muted");
           if (placeholder) placeholder.remove();
-          let text = data.lines;
+          let chunk = data.lines;
           if (!logStarted) {
             // the model often emits a leading "\n" as the first text_delta
-            text = text.replace(/^\s+/, "");
-            if (!text) return;  // all-whitespace chunk — keep waiting
+            chunk = chunk.replace(/^\s+/, "");
+            if (!chunk) return;  // all-whitespace chunk — keep waiting
             logStarted = true;
           }
-          logEl.appendChild(document.createTextNode(text));
-          logEl.scrollTop = logEl.scrollHeight;
+          logText += chunk;
+          if (logText.length > LOG_TAIL_CHARS) {
+            logText = "… (earlier output trimmed)\n\n" + logText.slice(-LOG_TAIL_CHARS);
+          }
+          // Follow the tail only when the reader is already at the bottom, so
+          // scrolling back through a run is not yanked away every 500 ms.
+          const atBottom =
+            logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= LOG_PIN_SLACK_PX;
+          renderLogText(logEl, logText);
+          if (atBottom) logEl.scrollTop = logEl.scrollHeight;
         }
       } catch (_) {}
     };
@@ -625,11 +673,15 @@ async function openTaskModal(taskId) {
 // leading newline.
 function renderPersistedChat(logEl, messages) {
   for (const m of messages) {
+    const body = normalizeLogText(m.content || "");
+    if (!body) continue; // a message with no text (tool-only turn) adds nothing
     const role = document.createElement("span");
     role.className = "chat-role";
     role.textContent = (m.role || "agent").trim();
     logEl.appendChild(role);
-    logEl.appendChild(document.createTextNode("\n" + (m.content || "").trim() + "\n\n"));
+    logEl.appendChild(document.createTextNode("\n"));
+    appendLogLines(logEl, body, { infra: false });
+    logEl.appendChild(document.createTextNode("\n"));
   }
 }
 
