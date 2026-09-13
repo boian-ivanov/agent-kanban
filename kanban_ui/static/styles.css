@@ -1259,9 +1259,14 @@ input.field--error {
 }
 
 /* The driver's own log lines (lane/setup/dispatch/run bookkeeping): dimmed so
-   the agent's text is what the eye lands on. */
+   the agent's text is what the eye lands on. Tool calls get the accent —
+   during tool work they are the only sign of progress. */
 .agent-logs .log-infra {
   color: var(--muted);
+}
+
+.agent-logs .log-tool {
+  color: var(--red);
 }
 
 /* ============ Links list ============ */

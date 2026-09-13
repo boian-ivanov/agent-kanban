@@ -333,6 +333,28 @@ def _message_text(message: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _tool_line(obj: dict[str, Any]) -> str:
+    """One compact, single-line description of a tool call.
+
+    The agent log only carried assistant TEXT, so a tool-heavy run looked
+    dead on the board while it was working (SP-049: 310 lines, 249 blank).
+    ``tool_execution_start`` carries the tool name plus the model's own
+    one-line ``intent``; fall back to the arguments when it is absent.
+    """
+    name = str(obj.get("toolName") or obj.get("name") or "tool")
+    intent = str(obj.get("intent") or "").strip()
+    if not intent:
+        args = obj.get("args") or {}
+        try:
+            intent = json.dumps(args, ensure_ascii=False)
+        except (TypeError, ValueError):
+            intent = str(args)
+    intent = " ".join(intent.split())
+    if len(intent) > 160:
+        intent = intent[:157] + "…"
+    return f"{name} {intent}".strip()
+
+
 def _render_context(ctx: dict[str, Any], task_id: str) -> str:
     """Render a GET /api/tasks/{id}/context bundle (T-313) as prompt text:
     task fields, ancestor chain (epic description / story acceptance), recent
@@ -1293,6 +1315,21 @@ def main() -> int:
                     log_delta("\n")
                     sys.stdout.write("\n")
                     sys.stdout.flush()
+                elif kind == "tool_execution_start":
+                    # Tool activity is the signal this log was missing: a
+                    # tool-heavy run emits almost no assistant TEXT, which is
+                    # why the board's Agent-output panel read as empty while the
+                    # agent was clearly working (SP-049: 80% blank lines).
+                    line = f"\n[tool] {_tool_line(obj)}\n"
+                    log_delta(line)
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                elif kind == "tool_execution_end":
+                    if obj.get("isError"):
+                        line = f"[tool] {obj.get('toolName') or 'tool'} FAILED\n"
+                        log_delta(line)
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
                 elif kind == "agent_end":
                     log_delta("\n")
                     sys.stdout.write("\n")

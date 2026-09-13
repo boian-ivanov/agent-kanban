@@ -541,9 +541,12 @@ function normalizeLogText(text) {
 function appendLogLines(logEl, text, { infra = true } = {}) {
   const lines = normalizeLogText(text).split("\n");
   for (const line of lines) {
-    if (infra && /^\[\d{4}-\d{2}-\d{2}T/.test(line)) {
+    let cls = null;
+    if (infra && /^\[\d{4}-\d{2}-\d{2}T/.test(line)) cls = "log-infra";
+    else if (/^\[tool\] /.test(line)) cls = "log-tool";
+    if (cls) {
       const span = document.createElement("span");
-      span.className = "log-infra";
+      span.className = cls;
       span.textContent = line + "\n";
       logEl.appendChild(span);
     } else {
