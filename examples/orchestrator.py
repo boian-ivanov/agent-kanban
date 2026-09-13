@@ -266,6 +266,13 @@ def merge_lane(lane: Lane) -> str:
     The base branch must be what the project tree has checked out: the merge
     lands on HEAD, so pushing ``base_branch`` while HEAD is something else
     would publish a stale ref.
+
+    The merge commit carries an explicit, conventional message: git's default
+    ("Merge branch 'task/SP-048'") is REJECTED by a repo whose commit-msg hook
+    enforces ``type(scope): …`` (salon-platform's lefthook does), which leaves
+    the merge uncommitted and the close half-done — observed live on SP-048
+    (2026-09-13). ``--no-verify`` would bypass the hook; a conforming message
+    keeps the history parseable instead.
     """
     head = git(lane.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if head != lane.base_branch:
@@ -273,7 +280,9 @@ def merge_lane(lane: Lane) -> str:
             f"{lane.repo} has {head!r} checked out, expected {lane.base_branch!r} "
             "— refusing to merge"
         )
-    proc = git(lane.repo, "merge", "--no-ff", lane.branch, check=False)
+    task_id = lane.branch.split("/", 1)[-1]
+    message = f"chore({task_id}): merge {lane.branch} into {lane.base_branch}"
+    proc = git(lane.repo, "merge", "--no-ff", "-m", message, lane.branch, check=False)
     print(f"[merge] {(proc.stdout + proc.stderr).strip()}")
     if proc.returncode != 0:
         conflicts = git(lane.repo, "diff", "--name-only", "--diff-filter=U").stdout.split()
